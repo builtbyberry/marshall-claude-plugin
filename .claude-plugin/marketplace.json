@@ -1,0 +1,19 @@
+{
+    "name": "marshall",
+    "metadata": {
+        "description": "Marshall — release coordination for AI coding agents, backed by the hosted Marshall store. One plugin per agent host.",
+        "version": "0.1.0"
+    },
+    "owner": {
+        "name": "Daniel Berry",
+        "email": "danielberrytn@gmail.com"
+    },
+    "plugins": [
+        {
+            "name": "marshall",
+            "source": "./marshall",
+            "description": "Claude Code host adapter for the Marshall release store.",
+            "keywords": ["marshall", "release", "orchestration", "claude-code"]
+        }
+    ]
+}

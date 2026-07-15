@@ -1,0 +1,20 @@
+{
+  "name": "marshall",
+  "displayName": "Marshall (Claude)",
+  "version": "1.0.0",
+  "description": "Release coordination for AI coding agents, backed by the hosted Marshall store. Connects the Marshall MCP server over OAuth so claims, drift, and startability live in one shared store — the same across machines, people, and agents — instead of repo-local JSON.",
+  "author": {
+    "name": "Daniel Berry",
+    "email": "danielberrytn@gmail.com"
+  },
+  "homepage": "https://github.com/builtbyberry/marshall-claude-plugin",
+  "repository": "https://github.com/builtbyberry/marshall-claude-plugin",
+  "license": "MIT",
+  "keywords": [
+    "swarm",
+    "release",
+    "orchestration",
+    "claude-code",
+    "marshall"
+  ]
+}
