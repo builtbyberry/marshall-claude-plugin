@@ -1,6 +1,6 @@
 ---
 name: change-review
-description: "Run a multi-lens change review over a release component's diff and record the findings in the shared Marshall store (not a local review-state file). Loads the configured change lenses, runs them against the component's diff, and writes findings (kind: change) via record_finding; supports defer/accept/fix/re-open via resolve_finding. Use when the user says /marshall:change-review, review this component, change review, or attaches a component diff/PR/branch for an Marshall-tracked release."
+description: "Run a multi-lens change review over a release component's diff and record the findings in the shared Marshall store (not a local review-state file). Loads the configured change lenses, runs them against the component's diff, and writes findings (kind: change) via record_finding; supports defer/accept/fix/re-open via resolve_finding. Use when the user says /marshall:change-review, review this component, change review, or attaches a component diff/PR/branch for a Marshall-tracked release."
 ---
 
 # Change Review (Marshall)

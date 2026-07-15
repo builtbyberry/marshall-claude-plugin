@@ -8,6 +8,16 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
+## 1.0.1 — 2026-07-15
+
+### Fixed
+
+- **A retired "Swarm Release Manager" wordmark in `/release-status`.** It sat one line under a heading that already read "Release Status (Marshall)", contradicting its own description. It survived the rename because it was **line-wrapped** — the rename rule matched a literal space, and the wrap put a newline there. The verification sweep missed it for a second reason: it scanned for `srm`, and a wrapped wordmark contains no `srm`. A catch-all only certifies the pattern class it actually scans. The check is now wrap-aware and covers every retired name, not just one family.
+- **`/release-status` no longer says "an Marshall-tracked release".** Two skill descriptions carried the article from "an SRM-tracked" — the strings Claude Code matches on for activation. A token-level rename cannot see grammar that depends on the token.
+- **The README described a plugin that does not exist.** It promised a `release-worker` agent (there is none), said the write path was still to come (it ships), and listed one skill (twelve ship) under the wrong root. It is now an accurate account of what you get.
+
+Nothing about how the plugin behaves changed — no skill logic, no tool, no endpoint. `state.backend` in your `release-config.json` is still the literal `"srm"`, and `php artisan srm:import-release` still has its name.
+
 ## 1.0.0 — 2026-07-15
 
 The first Marshall release. Supersedes the `srm` plugin from

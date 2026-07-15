@@ -13,18 +13,35 @@ codex / cursor adapters will register the same MCP endpoint.
 ## What's here
 
 ```
-plugins/claude/
+marshall/
   .claude-plugin/plugin.json   manifest (name, version, keywords)
   .mcp.json                    connects the hosted Marshall MCP server (OAuth)
   commands/release-status.md   /release-status — who holds what + drift
-  skills/release-next/         startable work, ranked (read-only)
   hooks/hooks.json             SessionStart: optional CLI readiness ping
   scripts/session-start.sh     the hook body (silent without the CLI)
+  skills/                      the twelve release skills:
+    release-init               bootstrap a project + release in the store
+    release-plan               scope a release into components
+    release-graph              declare the dependency graph (makes work startable)
+    release-open               cut the release branch + draft PR
+    release-next               what's startable, ranked by what it unblocks
+    release-topic              claim a component (the cross-machine lock) + branch
+    release-parallel           dispatch a wave across startable components
+    release-unclaim            hand a claim back, or force-revoke a stuck one
+    change-review              multi-lens review of a component's diff
+    release-readiness          multi-lens review of the release
+    release-wrap               review + CHANGELOG + hand off for deploy
+    release-deploy             merge → watch → smoke → monitor
 ```
 
-The MCP tools appear as `mcp__plugin_marshall_marshall__release_next`,
-`…__release_status`, `…__release_get`, `…__claim_component`,
-`…__heartbeat_claim`, `…__release_claim`, `…__revoke_claim`.
+The skills drive twenty MCP tools, each prefixed with the plugin's connection
+name — `mcp__plugin_marshall_marshall__release_next`, and so on. They span the
+read path (`release_get`, `release_next`, `release_status`), the write path
+(`project_create`, `release_create`, `component_create`, `release_update`,
+`set_release_graph`, `set_component_state`), the claim lifecycle
+(`claim_component`, `heartbeat_claim`, `release_claim`, `revoke_claim`), reviews
+(`record_finding`, `resolve_finding`, `lenses_get`), dispatch (`dispatch_open`,
+`dispatch_report`, `dispatch_get`), and deploy (`set_deploy_step`).
 
 ## Connecting (no config to set)
 
@@ -41,7 +58,10 @@ store URL from `MARSHALL_URL` — separate from this plugin.)
 
 ## Status
 
-`release-next` + `release-status` (read path) are wired over MCP end-to-end, and
-the claim lifecycle tools (`claim_component` → `heartbeat_claim` →
-`release_claim`, plus `revoke_claim`) are available. Skills for the write path
-and the rest of the lifecycle follow, along with a `release-worker` agent.
+The full release lifecycle is wired over MCP end-to-end — plan, graph, open,
+claim, review, wrap, deploy. The claim is a real cross-machine lock with a
+lease and a fence, so two people (or agents) on different machines cannot pick
+up the same component.
+
+codex and cursor adapters will register the same MCP endpoint; they are not
+published yet.

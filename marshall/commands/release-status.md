@@ -6,10 +6,10 @@ allowed-tools: Bash(marshall *)
 
 # Release Status (Marshall)
 
-Show the live coordination picture for a release from the shared Swarm Release
-Manager store: what's startable, who currently holds which component (and on
-which machine), and what has **drifted** — holds that went quiet and silently
-reopened. This is the cross-machine signal that repo-local JSON can't give you.
+Show the live coordination picture for a release from the shared Marshall store:
+what's startable, who currently holds which component (and on which machine),
+and what has **drifted** — holds that went quiet and silently reopened. This is
+the cross-machine signal that repo-local JSON can't give you.
 
 Read-only. This never claims, releases, or mutates anything.
 

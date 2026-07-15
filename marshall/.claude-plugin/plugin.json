@@ -1,7 +1,7 @@
 {
   "name": "marshall",
   "displayName": "Marshall (Claude)",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Release coordination for AI coding agents, backed by the hosted Marshall store. Connects the Marshall MCP server over OAuth so claims, drift, and startability live in one shared store — the same across machines, people, and agents — instead of repo-local JSON.",
   "author": {
     "name": "Daniel Berry",

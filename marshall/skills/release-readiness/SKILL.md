@@ -1,6 +1,6 @@
 ---
 name: release-readiness
-description: "Run a release readiness review and record its findings in the shared Marshall store (not a local review-state file). Loads the configured readiness lenses, runs them against the release, and writes findings via record_finding; supports defer/accept/fix/re-open via resolve_finding. Use when the user says /marshall:release-readiness, is this release ready, readiness review, pre-release checklist, or asks about migration safety, tenant safety, or deploy readiness for an Marshall-tracked release."
+description: "Run a release readiness review and record its findings in the shared Marshall store (not a local review-state file). Loads the configured readiness lenses, runs them against the release, and writes findings via record_finding; supports defer/accept/fix/re-open via resolve_finding. Use when the user says /marshall:release-readiness, is this release ready, readiness review, pre-release checklist, or asks about migration safety, tenant safety, or deploy readiness for a Marshall-tracked release."
 ---
 
 # Release Readiness (Marshall)
