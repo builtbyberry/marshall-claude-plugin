@@ -14,9 +14,36 @@ machines.
 
 - `mcp__plugin_marshall_marshall__release_next` — confirm the component is startable.
 - `mcp__plugin_marshall_marshall__claim_component` — take the lock (returns the claim id + fence).
+- `mcp__plugin_marshall_marshall__my_claims` — list **your own** live holds (claim id,
+  component, fence, machine, lease). The recovery surface after context
+  compaction — see **Recovering a lost claim** below.
 - `mcp__plugin_marshall_marshall__heartbeat_claim` — keep the lock alive during long work.
+  Takes **either** the claim id **or** the `component` id whose hold you own.
 - `mcp__plugin_marshall_marshall__release_claim` — hand it back when the work is parked or done
   (or use `/marshall:release-unclaim`).
+- `mcp__plugin_marshall_marshall__set_component_state` /
+  `mcp__plugin_marshall_marshall__set_component_states` — move the work-state; the second is
+  the batch counterpart for landing several at once (step 5).
+
+## Session setup — set the return verbosity once
+
+At the **start of a working session**, set this actor's write-return default once
+so every subsequent write comes back as the affected entity instead of the whole
+release document:
+
+```
+mcp__plugin_marshall_marshall__set_default_return { default_return: "minimal" }
+```
+
+This is a **stored per-actor preference**, not a per-call flag — set it once, not
+before every write, and never in a loop. It applies to this actor across the
+session; an explicit `return` on any individual call still wins over it, so a
+step that genuinely needs the whole document (reading the newly-unblocked wave
+after a `merged`) can still ask for `return: "full"` inline.
+
+Restore the whole-document default with `{ default_return: "full" }` when a
+session wants full payloads back. A fresh actor that never calls this is
+byte-unchanged — `full` is the default.
 
 ## Procedure
 
@@ -38,7 +65,43 @@ machines.
    `mcp__plugin_marshall_marshall__set_component_state { component, state: "merged" }`. This is
    separate from the lock — releasing the claim alone does NOT mark it merged,
    so a merged blocker won't open its dependents until you set this.
+   - **Landing several at once** (a wave's PRs merging together): use the batch
+     tool instead of a call per component —
+     `mcp__plugin_marshall_marshall__set_component_states { states: [{ component, state: "merged" }, ...] }`.
+     One transaction, one minimal ack, and the next wave's startability is
+     computed once rather than N times. It is all-or-nothing: an illegal item
+     rolls the whole batch back with `batch_item_failed` naming the item **by
+     index** and its `from`/`to` — surface that, fix the named item, re-send the
+     whole batch. Never decompose a rejected batch into singular calls.
 6. Then release the lock (`/marshall:release-unclaim` or `mcp__plugin_marshall_marshall__release_claim`).
+
+## Recovering a lost claim (context compaction)
+
+A long session can lose the opaque claim `id` it was handed at step 2 — a
+compaction drops it, or the work resumes in a fresh chat. **The hold is still
+yours; the handle is what went missing.** Do not re-claim: `claim_component`
+throws `claim_conflict` on a live re-claim *even for the same holder*.
+
+Recover it instead:
+
+```
+mcp__plugin_marshall_marshall__my_claims { release? }
+```
+
+It lists every claim **you** still hold — claim id, component, fence, machine,
+and lease — scoped to one release if you pass `release`, or across the whole
+workspace if you don't. Match the component you are working and take its `id`;
+heartbeating and releasing work normally from there.
+
+If you know the component but not the claim, you can also skip the lookup:
+`heartbeat_claim { component: <component id> }` and
+`release_claim { component: <component id> }` both accept the component id of a
+hold you own.
+
+If `my_claims` does **not** list the component, you no longer hold it (the lease
+lapsed, or it was released or revoked). That is a stop — re-claim deliberately
+via step 2 and check nobody else picked the work up; never assume a hold you
+cannot find is still yours.
 
 ## Guardrails
 
@@ -46,6 +109,8 @@ machines.
   `not_startable` is a hard stop, not a warning to work around.
 - The claim is the source of truth, not the branch. If you lose the lease, the
   branch doesn't protect you — re-claim.
-- One component per claim. To work several, claim each with `/marshall:release-topic`.
-  (One-shot concurrent dispatch — `/marshall:release-parallel` — is planned but not
-  yet available.)
+- **A lost claim id is a lookup, not a re-claim.** Use `my_claims` (or pass the
+  `component` id to `heartbeat_claim` / `release_claim`). Re-claiming a hold you
+  already own returns `claim_conflict`.
+- One component per claim. To work several, claim each with `/marshall:release-topic`,
+  or dispatch them as a wave with `/marshall:release-parallel`.

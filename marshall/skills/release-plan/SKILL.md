@@ -31,6 +31,13 @@ end-to-end. The conversation and the strict component shape are identical — th
   `{ provider, id, url }`. `source` defaults to `native` for store-born
   components — don't override it. Add `project` only to disambiguate the same
   version across projects.
+- `mcp__plugin_marshall_marshall__component_update` — amend a component that is
+  **already filed**. Identified by its `component` id (ULID); every other field is
+  **optional** and only what you pass changes. Editable: `title`, `branch_type`,
+  `slug`, `deploy_safety`, `touches`, `breaking`, `notes`, and `external_ref`
+  (pass `external_ref: null` to unlink). `source` is identity and cannot change.
+  This is the fix for a typo'd title or a revised deploy-safety answer — **not** a
+  second `component_create` (see **Amending a filed component** below).
 
 If the MCP server isn't connected, **stop and say so** — the store is the only
 place the plan can land; do not fall back to filing GitHub issues or writing a
@@ -220,6 +227,46 @@ release:
 
 Use `add` whenever a new piece of work surfaces after the initial plan, instead
 of re-running the whole conversation.
+
+## Amending a filed component
+
+A component that is already in the store is **editable** — planning is a
+conversation, and the answers move. When the operator revises something about a
+component that already exists ("the migration is actually destructive", "rename
+that one", "link it to PROJ-123"), **patch it; do not file a second one.**
+
+```
+mcp__plugin_marshall_marshall__component_update {
+  component: "<component ULID>",
+  title?:         "<new title>",
+  slug?:          "<new-slug>",
+  branch_type?:   "<type>",
+  deploy_safety?: { migration: "...", feature_flag: "...", rollback: "..." },
+  breaking?:      <true|false>,
+  notes?:         "<revised body>",
+  touches?:       ["app/Models/*.php"],
+  external_ref?:  { provider: "...", id: "...", url: "..." }   // or null to unlink
+}
+```
+
+The patch is **partial**: only the fields you pass change, so amending a title
+cannot silently blank the notes. Read the current component from `release_get`
+first, show the operator the before/after for the fields you are about to change,
+and take the same `yes` you would for a create.
+
+Two things this is **not**:
+
+- **Not a work-state move.** `component_update` edits *fields*. A component's
+  lifecycle (`open` → `in_progress` → `proposed` → `merged`, or `cancelled`) moves
+  only via `mcp__plugin_marshall_marshall__set_component_state`. Never try to
+  express "this is done" as an update.
+- **Not a delete.** To remove a component from view, use `/marshall:release-admin`
+  (archive, or hard-delete a mis-created one). Blanking a component's fields to
+  make it "go away" leaves a live, unblocked, empty row in the graph.
+
+`deploy_safety` and `external_ref` replace wholesale rather than merging, so pass
+the **complete** object for those two — including the sub-answers that are not
+changing.
 
 ## After
 

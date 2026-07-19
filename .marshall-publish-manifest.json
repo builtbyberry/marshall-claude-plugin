@@ -10,6 +10,7 @@
     "marshall/hooks/hooks.json",
     "marshall/scripts/session-start.sh",
     "marshall/skills/change-review/SKILL.md",
+    "marshall/skills/release-admin/SKILL.md",
     "marshall/skills/release-deploy/SKILL.md",
     "marshall/skills/release-graph/SKILL.md",
     "marshall/skills/release-init/SKILL.md",

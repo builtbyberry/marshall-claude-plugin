@@ -1,6 +1,6 @@
 ---
 name: release-deploy
-description: "Drive the deploy step of a release against the shared Marshall store: merge the release PR, watch the deploy, smoke-check production, monitor the window — recording every step on the store's Deploy record so it is resumable across sessions and machines. Use when the user says /release-deploy, deploy the release, ship <release>, or cut over to prod. Deploy-mode only."
+description: "Drive the final cut-over of a release against the shared Marshall store — deploy mode (merge the release PR, watch the deploy, smoke-check production, monitor the window, via set_deploy_step) or tag mode (merge, date, tag, GitHub Release, Packagist, via set_ship_step) — recording every step on the store's record so it is resumable across sessions and machines. Use when the user says /release-deploy, deploy the release, ship <release>, tag the release, or cut over to prod."
 ---
 
 # Release Deploy (Marshall)
@@ -17,11 +17,18 @@ re-shipping prod.
 - `mcp__plugin_marshall_marshall__release_get` — read the release + its **deploy** block (the
   authoritative `step`, `smoke_ok`, `monitor`, `verdict`). Read it on **every**
   invocation; never trust prior conversation memory for where the deploy is.
-- `mcp__plugin_marshall_marshall__set_deploy_step` — start (`step: merging`) or advance the deploy one
-  legal step (`deploying → smoke → monitor → done`), carrying evidence
-  (`merged_by`, `merge_sha`, `deploy_url`, `smoke_ok`, `monitor`, `verdict`). The
-  store enforces one deploy per release, legal forward transitions, the readiness
-  gate, and an atomic audit row — you only supply the next step + evidence.
+- `mcp__plugin_marshall_marshall__set_deploy_step` — **deploy mode.** Start (`step: merging`) or
+  advance the deploy one legal step (`deploying → smoke → monitor → done`),
+  carrying evidence (`merged_by`, `merge_sha`, `deploy_url`, `smoke_ok`,
+  `monitor`, `verdict`). The store enforces one deploy per release, legal forward
+  transitions, the readiness gate, and an atomic audit row — you only supply the
+  next step + evidence.
+- `mcp__plugin_marshall_marshall__set_ship_step` — **tag mode.** The same progression for a
+  release that ships as a tagged package rather than a deploy:
+  `merging → dating → tagging → releasing → done`, carrying `merged_by`,
+  `merge_sha`, `changelog_date`, `tag`, `release_url`, `verdict`. Same one-record,
+  same readiness gate, same `invalid_transition` on a skipped or reversed step.
+  See **Tag mode** below.
 
 If the MCP server isn't connected, **stop and say so** — the store's Deploy
 record is the only source of truth for where the deploy is; never drive a deploy
@@ -33,10 +40,22 @@ and stop; resolve them via `/marshall:release-wrap` (or `resolve_finding`) first
 returns `invalid_transition`, you tried to skip a step — re-read `deploy.step` and
 continue from there.
 
+## Which mode — read `wrap.mode` first
+
+`wrap.mode` in `.claude/release-config.json` decides which progression this skill
+drives, and the two are **mutually exclusive** — one record per release:
+
+- **`deploy`** → the cut-over flow below, driven by `set_deploy_step`.
+- **`tag`** → the ship flow in **Tag mode**, driven by `set_ship_step`.
+
+Resolve the mode before anything else and say which one you are driving. Never
+mix the two tools on one release: a tag-mode release has no smoke/monitor step,
+and a deploy-mode release has no tag.
+
 ## Config
 
 Reads `.claude/release-config.json` (tracked) for `repo`, `default_branch`,
-`wrap.mode` (must be `deploy` — refuse otherwise), and the `deploy` block:
+`wrap.mode`, and — in deploy mode — the `deploy` block:
 - `deploy.provider` — `laravel-cloud` (watch the cloud deploy) or `none`/`manual`
   (auto-deploy is OFF; the operator performs the deploy by hand and you record the
   steps as they confirm). Default-safe to manual.
@@ -61,9 +80,10 @@ On invocation, `release_get { release }` and read `deploy.step`:
 > action below is gated on `deploy.step` precisely so a resumed or re-dispatched
 > run never re-merges or re-deploys what already happened.
 
-## Preflight (refuse on failure)
+## Preflight — deploy mode (refuse on failure)
 
-1. `wrap.mode == deploy` and `deploy.production_url` is set.
+1. `wrap.mode == deploy` and `deploy.production_url` is set. (If `wrap.mode == tag`,
+   go to **Tag mode** instead of refusing.)
 2. HEAD is on the release branch; working tree clean.
 3. The release PR exists, is not a draft, is `MERGEABLE`/`CLEAN`, and its checks
    are green (`gh pr view --json isDraft,mergeable,mergeStateStatus,statusCheckRollup`).
@@ -177,6 +197,62 @@ When the deploy reaches `done`/`shipped`, the release is shipped. If this skill 
 driving a release component's lifecycle, mark it merged and release its claim per
 `/marshall:release-topic` step 5–6. The release's derived phase is now `shipped`
 (from `deploy.step === 'done'`).
+
+## Tag mode — the ship path (`wrap.mode == tag`)
+
+A release that ships as a **tagged package** (Packagist auto-syncs on the tag)
+has no deploy to watch and no production URL to smoke. Its progression is
+`merging → dating → tagging → releasing → done`, driven by
+`mcp__plugin_marshall_marshall__set_ship_step`. Everything the deploy flow
+guarantees still holds: one record per release, forward-only legal steps, the
+same readiness gate, and evidence recorded at each step.
+
+**The irreversible steps are OPERATOR-run.** The store records the ship; it does
+not execute it. Never run `git tag`, `git push --tags`, or `gh release create`
+yourself — surface the exact command, wait for the operator to confirm, then
+record what they did as evidence.
+
+### Resume — read `deploy.step` from the store
+
+Same rule as deploy mode: `release_get { release }`, read the ship record's
+`step`, and continue from there. `tagging`+ means **a tag may already be pushed**
+— check `git ls-remote --tags origin <tag>` before acting, and never re-tag.
+
+### The flow
+
+1. **Gate, then merge.** `set_ship_step { release, step: "merging" }` creates (or
+   idempotently resumes) the record and trips the readiness gate. A
+   `deploy_blocked` means unresolved high findings — stop, surface them, route to
+   `/marshall:release-wrap`. Only once it clears, surface
+   `gh pr merge <N> --merge --delete-branch` for the **operator** to run.
+2. **Date the CHANGELOG.** Stamp the release heading with today's date and commit,
+   then record it: `set_ship_step { release, step: "dating", merged_by,
+   merge_sha: <oid>, changelog_date: <YYYY-MM-DD> }`. Dating before tagging is
+   what stops the tag from pointing at a commit whose CHANGELOG still says
+   "unreleased" — the three-way manifest/CHANGELOG/tag drift this ordering exists
+   to prevent.
+3. **Tag.** Surface `git tag <tag> && git push origin <tag>` for the operator.
+   When they confirm, record it: `set_ship_step { release, step: "tagging", tag }`.
+   This is the irreversible step — Packagist syncs off it.
+4. **Publish the GitHub Release.** Surface `gh release create <tag> --title ...
+   --notes-file ...` (notes from the dated CHANGELOG section). When they confirm,
+   record it: `set_ship_step { release, step: "releasing", release_url }`.
+5. **Close it out.** `set_ship_step { release, step: "done", verdict: "shipped" }`.
+   The release derives `shipped`. If the ship went wrong and the operator is
+   backing it out, record `verdict: "rollback-needed"` instead and stop — do not
+   fake a shipped verdict.
+
+### Tag-mode guardrails
+
+- **Never skip or reverse a step.** `set_ship_step` returns `invalid_transition`
+  — re-read the record's `step` and continue from there rather than forcing it.
+- **Never re-tag or re-release.** `tagging`/`releasing` in the record means it
+  already happened; a pushed tag is public the moment Packagist sees it.
+- **Record evidence, don't execute.** `merged_by`, `merge_sha`, `changelog_date`,
+  `tag`, `release_url` are reported by the operator and stored verbatim — the
+  store does not verify them, so do not invent or guess a value.
+- **The readiness gate is the same gate.** `deploy_blocked` blocks a tag exactly
+  as it blocks a deploy.
 
 ## Guardrails
 

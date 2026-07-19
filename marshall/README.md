@@ -19,7 +19,7 @@ marshall/
   commands/release-status.md   /release-status — who holds what + drift
   hooks/hooks.json             SessionStart: optional CLI readiness ping
   scripts/session-start.sh     the hook body (silent without the CLI)
-  skills/                      the twelve release skills:
+  skills/                      the thirteen release skills:
     release-init               bootstrap a project + release in the store
     release-plan               scope a release into components
     release-graph              declare the dependency graph (makes work startable)
@@ -32,16 +32,27 @@ marshall/
     release-readiness          multi-lens review of the release
     release-wrap               review + CHANGELOG + hand off for deploy
     release-deploy             merge → watch → smoke → monitor
+    release-admin              archive / restore / delete a record (corrective)
 ```
 
-The skills drive twenty MCP tools, each prefixed with the plugin's connection
-name — `mcp__plugin_marshall_marshall__release_next`, and so on. They span the
-read path (`release_get`, `release_next`, `release_status`), the write path
-(`project_create`, `release_create`, `component_create`, `release_update`,
-`set_release_graph`, `set_component_state`), the claim lifecycle
-(`claim_component`, `heartbeat_claim`, `release_claim`, `revoke_claim`), reviews
-(`record_finding`, `resolve_finding`, `lenses_get`), dispatch (`dispatch_open`,
-`dispatch_report`, `dispatch_get`), and deploy (`set_deploy_step`).
+The skills drive all forty-three MCP tools, each prefixed with the plugin's
+connection name — `mcp__plugin_marshall_marshall__release_next`, and so on. They
+span the read path (`release_get`, `release_next`, `release_status`,
+`project_list`, `release_changelog`), the write path (`project_create`,
+`release_create`, `component_create`, the matching `*_update` tools,
+`set_release_graph`, `set_component_state`/`set_component_states`), the claim
+lifecycle (`claim_component`, `heartbeat_claim`, `release_claim`, `revoke_claim`,
+`my_claims`), reviews (`record_finding`/`record_findings`,
+`resolve_finding`/`resolve_findings`, `lenses_get`, `lenses_applicable`,
+`set_release_lenses`), dispatch (`dispatch_open`, `dispatch_report`/
+`dispatch_reports`, `dispatch_get`, `dispatch_close`), deploy and ship
+(`set_deploy_step`, `set_ship_step`), and the corrective lifecycle
+(`archive_*` / `unarchive_*` / `hard_delete_*`).
+
+Every registered tool is referenced by at least one skill, and CI enforces it —
+a tool the server exposes but no skill mentions is a capability no operator can
+discover, which is how the first two audits found twenty-one of them sitting
+unused.
 
 ## Connecting (no config to set)
 

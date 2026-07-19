@@ -8,6 +8,80 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
+## 1.1.0 — 2026-07-19
+
+The skills catch up to the store.
+
+An audit of the Marshall MCP surface found **23 of 43 registered tools that no
+skill ever called** — including nearly every affordance the store shipped in its
+previous release: atomic batch writes, minimal-by-default responses, resumable
+claims, the store-generated changelog, the readiness fan-out pre-filter, and the
+tag-mode ship path. The capabilities were live and reachable; the client simply
+never reached for them, so the work they save was never actually saved. Nothing
+failed, because a tool nobody calls and a tool that works look identical from the
+outside.
+
+This release closes that gap and adds a CI gate on the source side so it cannot
+reopen quietly.
+
+### Added
+
+- **`/marshall:release-admin`** — the nine lifecycle verbs that had no home:
+  archive, unarchive and hard-delete across project, release and component. These
+  are what you reach for when something went wrong, not steps in a workflow, so
+  they get their own skill rather than being buried inside one. It also documents
+  an ordering rule the individual tools do not state: archiving resolves
+  bottom-up, unarchiving top-down, and unarchive does not cascade.
+  `hard_delete_*` is fenced server-side to owner-only and empty-only, so the only
+  thing it can remove is a mis-created empty record — the skill documents those
+  refusals rather than re-implementing the guard.
+
+### Changed
+
+- **Every review and lifecycle skill now uses the store's batch writes.**
+  `change-review` and `release-readiness` record and resolve a whole pass in one
+  atomic call instead of one call per finding; `release-parallel` reports wave
+  progress in one call; state transitions batch. Each batch site documents
+  `batch_item_failed` as stop-and-resend, because decomposing a rejected batch
+  into singular retries half-writes the pass the batch would have rolled back
+  cleanly.
+- **`release-topic` can recover a hold it lost.** A session whose context was
+  compacted no longer strands its claim — `my_claims` finds every hold you still
+  own, including the opaque claim id you no longer have.
+- **`release-topic` sets a session-wide minimal response default once**, so the
+  store's smaller payloads are actually realized instead of being available and
+  unused.
+- **`release-wrap` pulls the changelog from the store** rather than assembling it
+  by hand.
+- **`release-readiness` pre-filters its lens set against the changed files**
+  before fanning out, so a docs-only or frontend-only diff no longer spawns a
+  subagent per lens. Honest boundary: this narrows frontend, migration, test and
+  docs diffs well, and still narrows nothing on a backend diff.
+- **`release-deploy` drives tag mode**, for the repos that ship a package rather
+  than a deployment: merge → date → tag → GitHub Release → Packagist. The
+  irreversible steps stay operator-run — the skill surfaces the command and
+  records the evidence, it never executes them for you.
+- **`release-plan` can amend a component after it exists** (`component_update`),
+  `release-parallel` can close a stuck wave, and `release-init` can list existing
+  projects so a fresh init does not duplicate one.
+
+### Fixed
+
+- **`release-parallel` contradicted itself about failed members.** Its resume
+  section called `failed` terminal and told you to leave such a member alone,
+  while its subagent brief called the same note "the resume signal for a retry".
+  Both cannot be true. `failed` is not terminal — it records that one *attempt*
+  ended, and a recovered member can now be reported forward to where the work
+  actually is, without the board forgetting the attempt failed.
+- **Skills that named a tool in prose but never called it.** `set_release_lenses`
+  and `project_update` read as covered to a human and were invisible to an agent,
+  which can only act on the callable form. Both are now genuinely invoked.
+
+Requires the Marshall store at v0.17.0 or later, which is live at
+[releasemarshall.com](https://releasemarshall.com). Nothing in your repository
+changes: `state.backend` is still the literal `"srm"`, and
+`php artisan srm:import-release` keeps its name.
+
 ## 1.0.1 — 2026-07-15
 
 ### Fixed

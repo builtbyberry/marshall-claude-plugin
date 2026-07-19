@@ -25,10 +25,17 @@ than a local file. It is the change-review counterpart to `/marshall:release-rea
   (`{ slugs: [...] }` → each lens's frontmatter + body). The store is the
   catalog; there is **no `~/.claude/skills/_lenses` fallback**. Any slug it can't
   resolve comes back as `lens_not_found` — surface it and stop.
-- `mcp__plugin_marshall_marshall__record_finding` — record a new change finding
-  (`{ release, kind: "change", ref, severity, summary, rationale?, component_id }`).
-- `mcp__plugin_marshall_marshall__resolve_finding` — transition a finding
-  (`{ finding, status, rationale? }`): `deferred | accepted | fixed | open`.
+- `mcp__plugin_marshall_marshall__record_findings` — **the default write**: record the
+  whole pass's findings in ONE atomic call
+  (`{ release, findings: [{ kind: "change", ref, severity, summary, rationale?, evidence?, component_id }, ...] }`).
+  A review pass produces N findings at once, so it costs one round trip, not N.
+- `mcp__plugin_marshall_marshall__record_finding` — the singular fallback, for the
+  genuine one-off (a single finding recorded after the pass, mid-conversation).
+- `mcp__plugin_marshall_marshall__resolve_findings` — **the default transition**: apply a
+  whole pass of resolutions in ONE atomic call
+  (`{ findings: [{ finding, status, rationale? }, ...] }`).
+- `mcp__plugin_marshall_marshall__resolve_finding` — the singular fallback, for a single
+  named finding (`{ finding, status, rationale? }`): `deferred | accepted | fixed | open`.
 
 (If the MCP server isn't connected, stop and say so — there is no local fallback
 for store findings *or* lenses.)
@@ -45,6 +52,38 @@ for store findings *or* lenses.)
   The store is authoritative; there is no `~/.claude/skills/_lenses/<slug>.md`
   fallback. Any unresolved slug fails loud (`lens_not_found`) — surface it and
   stop, never silently skip.
+- **Changing the selection** — `mcp__plugin_marshall_marshall__set_release_lenses`
+  writes it. This is a **config** act, not part of a review pass: change the
+  selection *before* you review, never mid-pass to make a finding go away.
+
+  ```
+  mcp__plugin_marshall_marshall__set_release_lenses {
+    scope:   "change",              // change | readiness | design
+    target:  "release",             // "project" (default) | "release"
+    release: "<version-or-slug>",
+    lenses:  ["security", "laravel-conventions"]
+  }
+  ```
+
+  `target` is the part worth getting right, and it defaults to the **broader** of
+  the two:
+  - `target: "project"` (**the default**) writes the **project default**, shared by
+    **every** release in that project — including ones already in flight. Omitting
+    `target` while meaning "just this release" is the mistake to avoid.
+  - `target: "release"` writes a per-release **override** of that scope only.
+    `clear: true` (release target, `lenses` omitted) drops the override so the
+    release inherits the project default again.
+
+  It overwrites **only the named scope**, preserving the others, and `lenses`
+  replaces wholesale — so pass the **complete** set you want, not just additions.
+  An empty array is a deliberate empty selection, not a no-op. Every slug must
+  resolve in the catalog or the whole call fails loud (`lens_not_found`) and
+  **nothing is written**.
+
+  `release_get`'s `reviews.change` block reports the outcome: `effective` (the set
+  that will actually run), `source` (`release_override` | `project_default`),
+  `project_default`, and `overridden`. Read it back after writing and report
+  `effective` — that, not what you passed, is what the next review runs.
 
 `.claude/release-config.json` is still read for non-lens fields only —
 `default_branch` (the diff base). Lifting the rest of release-config into the
@@ -160,9 +199,9 @@ Aggregate every subagent's findings before continuing.
 Do one integration pass using each lens's `related:` array. When a finding was
 surfaced or sharpened by another lens, note it: `*(+ <lens-name> via synthesis)*`.
 
-### Step 6 — Reconcile against the store, then record (idempotent re-run)
+### Step 6 — Reconcile against the store, then record the pass in ONE call
 
-`record_finding` is **not idempotent** — calling it again writes another row. So
+Recording is **not idempotent** — calling it again writes another row. So
 before recording, reconcile each fresh finding against the existing `kind: "change"`
 findings loaded in Step 1:
 
@@ -174,9 +213,34 @@ findings loaded in Step 1:
   existing status and id.
 - **Match to an `accepted` or `fixed` finding** → suppress (already resolved),
   unless the issue has genuinely regressed — then record a new one and say so.
-- **No match** → record it: `record_finding { release, kind: "change", ref,
-  severity, summary, rationale?, component_id }`. Always pass the resolved
+- **No match** → it goes in the batch (below). Always carry the resolved
   `component_id`.
+
+Then write the **whole surviving set in a single call**:
+
+```
+mcp__plugin_marshall_marshall__record_findings {
+  release,
+  findings: [
+    { kind: "change", ref, severity, summary, rationale?, evidence?, component_id },
+    ...
+  ]
+}
+```
+
+**Batch it — do not loop `record_finding` per finding.** A pass of eight findings
+is one round trip, not eight, and the ack is minimal (`{ recorded, findings: [{ id,
+ref, kind, severity, status, component_id }] }`) rather than eight full release
+documents. Every item carries the same `release`, so pass it once at the top level.
+
+The batch is **all-or-nothing**: one invalid item (e.g. a `component_id` outside
+this release) rolls the whole batch back and fails loud with `batch_item_failed`
+naming the offending item **by index** — there is never a partial write. Surface
+that verbatim, fix the named item, and re-send the whole batch; do not fall back
+to recording them one at a time to route around it.
+
+Use singular `record_finding` only for a genuine one-off — a single finding
+recorded after the pass, in follow-up conversation.
 
 Always report `recorded N / already-tracked M` so any duplicate is immediately
 visible. Recording twice in the same review run is the failure mode this step
@@ -257,6 +321,30 @@ per lens. Expand any lens that surfaces non-trivial risk to a full finding.
 These map 1:1 onto `resolve_finding`. Resolve the `F#` the user names to its store
 `id` via the most recent review output or `release_get`.
 
+**When the user names more than one finding in a single instruction — "defer F3
+and F4, accept F2", "accept everything low" — use the batch tool, not a loop:**
+
+```
+mcp__plugin_marshall_marshall__resolve_findings {
+  findings: [
+    { finding: <id>, status: "deferred", rationale? },
+    { finding: <id>, status: "accepted", rationale? },
+    ...
+  ]
+}
+```
+
+One transaction, one minimal ack (`{ resolved, findings: [...] }`), and mixed
+target statuses are fine in the same call. It is **all-or-nothing**: an unseeable
+finding fails with `finding_not_found` before any write, and an illegal or no-op
+transition rolls the whole batch back with `batch_item_failed` naming the item by
+index and its `from`/`to`. Surface that verbatim, drop or correct the named item,
+and re-send — never retry item-by-item to sneak the legal ones through, because
+the user asked for one decision.
+
+The singular modes below are the shape of each item, and the tool to use when the
+user names exactly one finding.
+
 ### Defer
 
 `"defer F3"` or `"defer F3 — fix lands next sprint"`:
@@ -301,6 +389,14 @@ fixed) with each finding's `id`, `ref`, `severity`, and `summary`.
   recorded finding. A signal conflict is a stop-and-ask, not a guess.
 - Reconcile before recording — never write a duplicate of a finding the store
   already holds open. Filter every `release_get` read to `kind: "change"`.
+- **Batch by default.** A pass writes with `record_findings` and resolves a
+  multi-finding instruction with `resolve_findings`; the singular tools are for
+  one-offs. Looping the singular tool over a pass is the anti-pattern — it costs a
+  round trip and a full document per finding, and it can half-write a pass that
+  the batch would have rolled back cleanly.
+- **A `batch_item_failed` is a stop, not a retry loop.** Surface the named index
+  verbatim, fix that item, re-send the whole batch. Never decompose a rejected
+  batch into singular calls to get the rest through.
 - The store enforces the lifecycle. Ask only for legal transitions; surface
   `invalid_finding_transition` verbatim rather than working around it. There is no
   `fixed-verified`.

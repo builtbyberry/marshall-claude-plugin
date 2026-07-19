@@ -32,9 +32,14 @@ no UPGRADING.md (those belong to the tag-mode file-based wrap).
 - `mcp__plugin_marshall_marshall__release_status` — the live coordination picture: which components are
   still held, and which have **drifted** (a hold that went quiet and silently
   reopened). Use it to catch a component that looks done but isn't truly merged.
-- `mcp__plugin_marshall_marshall__record_finding` / `mcp__plugin_marshall_marshall__resolve_finding` — these are driven by
-  the composed review skills, not called directly here. The wrap **reads** the
-  findings they produce to drive the gate.
+- `mcp__plugin_marshall_marshall__release_changelog` — emit the release's CHANGELOG section
+  **from store data**: every non-archived, non-cancelled component grouped into
+  Added / Changed / Fixed by `branch_type` (`feat`→Added, `fix`→Fixed,
+  `chore`/`refactor`/`perf`→Changed), under the release theme, in the house
+  format. Read-only. This is what Step 2 writes.
+- `mcp__plugin_marshall_marshall__record_findings` / `mcp__plugin_marshall_marshall__resolve_findings`
+  (and their singular siblings) — driven by the composed review skills, not called
+  directly here. The wrap **reads** the findings they produce to drive the gate.
 - `mcp__plugin_marshall_marshall__set_component_state` — only the composed `/marshall:release-topic` flow
   moves components to `merged`. This skill does not advance work-state; it reads it.
 
@@ -108,13 +113,22 @@ in the store via `record_finding`, reconciling against what's already there.
 
 Mechanics mirror the file-based wrap, minus tag-mode extras:
 
-1. Open `<wrap.changelog_path>`. Replace `## <release> - unreleased` (or the
-   `_To be filled in during release wrap-up._` placeholder) with
-   `## <release> - <today's date YYYY-MM-DD>`.
-2. Fill `### Added` / `### Changed` / `### Fixed` / `### Removed` by walking the
-   merged components. Use `release_get` for the component titles/refs and the
-   merged PRs for the prose; issue-numbered bullets, named feature in **bold**,
-   behavior + rationale in plain prose.
+1. **Ask the store for the section — don't hand-assemble it.**
+   `mcp__plugin_marshall_marshall__release_changelog { release }` returns the whole
+   section already grouped into `### Added` / `### Changed` / `### Fixed` by each
+   component's `branch_type`, under the release theme, in the house format.
+   Generate-at-wrap is the point: the wrap writes the CHANGELOG in **one commit**,
+   which is why component PRs no longer edit it and no longer conflict on it.
+   Do not walk the components yourself to rebuild what the store already emits.
+2. Open `<wrap.changelog_path>`, replace `## <release> - unreleased` (or the
+   `_To be filled in during release wrap-up._` placeholder) with the generated
+   section, and stamp the heading `## <release> - <today's date YYYY-MM-DD>`.
+   Then **edit the generated prose** — the store knows every component's title and
+   type, not the story of each change. Sharpen bullets from the merged PRs: named
+   feature in **bold**, behavior + rationale in plain prose. Add a `### Removed`
+   group by hand if the release needs one; the generator emits only
+   Added/Changed/Fixed. Never *drop* a generated bullet — a component that shipped
+   belongs in the log even if its bullet needs rewriting.
 3. **No UPGRADING.md and no tag** — `wrap.mode == "deploy"`. Deploy notes live in
    the release PR body / in-app changelog, not an UPGRADING block.
 4. Commit `docs(changelog): fill in <release> release wrap-up`.
@@ -171,6 +185,10 @@ ready.
 - **The store is the source of truth** — derive every phase from `release_get`,
   not from conversation memory. Do not create a local wrap/review/readiness/deploy
   state file.
+- **The CHANGELOG section is generated, then edited — never hand-assembled from
+  scratch.** `release_changelog` emits the grouped section from store data; the
+  wrap's job is to sharpen the prose and stamp the date, in one commit. Rebuilding
+  it by walking components by hand is how the log drifts from what actually shipped.
 - **Compose, don't duplicate.** This skill records no findings itself; change
   findings are `/marshall:change-review`'s job (`kind: change`), readiness findings are
   `/marshall:release-readiness`'s (`kind: readiness`). It only *reads* findings to drive

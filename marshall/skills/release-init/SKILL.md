@@ -24,6 +24,16 @@ against a release that already exists **resumes** rather than duplicating.
 
 ## How it talks to the store
 
+- `mcp__plugin_marshall_marshall__project_list` — **every** project in the
+  workspace: the "what already exists here?" read, so a new bootstrap does not
+  duplicate a project that is already there under a slightly different name. Takes
+  **no arguments**. This is deliberately broader than `release_next`, which only
+  surfaces projects with unshipped startable work — `project_list` also shows a
+  project whose releases have **all shipped**, and an **empty** project with no
+  releases at all. Those two are exactly the ones a fresh init would otherwise
+  re-create. Archived projects are included and flagged (`archived: true`), and
+  each entry carries `slug`, `name`, `repo`, `tracker_kind`, a `release_summary`
+  (release counts by lifecycle phase) and `archived_releases`.
 - `mcp__plugin_marshall_marshall__project_create` — resolve-or-create the workspace project. The
   external-tracker link — `repo` (owner/name) plus `tracker_kind` (github /
   jira / linear) — lives **here** and is **optional**; a project does not
@@ -61,7 +71,21 @@ be born.
    does not expose `project_create` / `release_create`, stop and surface the
    import fallback above (`php artisan srm:import-release`). This is a graceful
    refusal, not an error to work around.
-3. **Resolve-or-create the project — and offer the optional external-tracker
+3. **Survey the workspace before creating anything.**
+   `mcp__plugin_marshall_marshall__project_list {}` (no arguments) and read the
+   result back to the operator.
+   - **A project already matches** — same repo, or a name that is plainly the same
+     thing ("Marshall" vs "marshall-release-manager") → **reuse it**. Confirm the
+     slug with the operator and carry it forward; do not create a near-duplicate.
+     `project_create` de-duplicates on its own terms, but it cannot tell that two
+     *differently named* projects are the same project — only the operator can, and
+     only if you show them the list.
+   - **A match exists but is `archived: true`** → say so explicitly. The operator
+     almost certainly wants it **restored**, not shadowed by a fresh copy:
+     `/marshall:release-admin` (`unarchive_project`). A second live project pointing
+     at the same repo is the worst outcome here, because both then look correct.
+   - **No match** → continue; this is a genuinely new project.
+4. **Resolve-or-create the project — and offer the optional external-tracker
    link here.**
    `mcp__plugin_marshall_marshall__project_create { name: "<project>", repo?: "<owner/repo>",
    tracker_kind?: "github | jira | linear" }`.
@@ -73,7 +97,7 @@ be born.
    - It returns the project whether it already existed in the workspace or was
      just created. Report which happened ("reused existing project" vs "created
      project") so the operator knows nothing was duplicated.
-4. **Probe for an existing release (idempotency / resume).**
+5. **Probe for an existing release (idempotency / resume).**
    `mcp__plugin_marshall_marshall__release_get { project: <project>, release: "<version-or-slug>" }`.
    - **Found** → the release already exists. **Do not create a second one.**
      Report it as already live and hand off (its components/graph are the next
@@ -81,13 +105,13 @@ be born.
      external link on a resume — surface its current value as-is; to change it
      later, use the store's `project_update` tool.
    - **Not found** → continue to create it.
-5. **Create the release.**
+6. **Create the release.**
    `mcp__plugin_marshall_marshall__release_create { project: <project>, version:
    "<version-or-slug>", slug?: "<slug>", theme: "<theme>", out_of_scope:
    "<out_of_scope>" }`.
    `slug` is derived from `version` when omitted; `source` defaults to
    `native`. On success, report the created release.
-6. **Report.** Print the project (reused or created), the release version-or-slug
+7. **Report.** Print the project (reused or created), the release version-or-slug
    and theme, whether an external link was attached, and the next step:
    `Run /marshall:release-plan to add components, then /marshall:release-graph to verify the
    dependency graph, and /marshall:release-open to cut the branch.`
@@ -97,8 +121,20 @@ be born.
 - **Create-only (this skill).** This skill births a project + release; it does
   not modify or remove them — a re-run resumes an existing release, never
   overwriting or duplicating it. Editing a created record later is a separate
-  path: the store's `project_update` / `release_update` tools (deletes remain
-  unsupported).
+  path: `mcp__plugin_marshall_marshall__project_update` (name, `repo`,
+  `tracker_kind`, `slug`, and the release-config defaults) or
+  `mcp__plugin_marshall_marshall__release_update`. Removing one is a separate path
+  again — `/marshall:release-admin`, which archives (reversible) or hard-deletes a
+  mis-created empty record.
+
+  One sharp edge worth knowing before you patch a project: changing `repo` to a
+  **different** value **clears every existing release milestone link** under it
+  (`milestone_number` and `tracker_url` are nulled), because `tracker_url` is
+  derived from the repo and would otherwise silently re-point at an unrelated
+  milestone. The response carries a `warning` naming the unlinked releases —
+  surface it and re-link each one explicitly with
+  `release_update { milestone_number }`. Setting `repo` to the same value, or
+  leaving it out, touches no links.
 - **Probe before you create.** Always `release_get` first. If the release exists,
   resuming is the correct outcome; creating a duplicate is a bug.
 - **The store is the source of truth; the external link is optional.** Never
