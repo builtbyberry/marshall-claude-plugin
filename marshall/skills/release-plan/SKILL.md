@@ -25,19 +25,13 @@ end-to-end. The conversation and the strict component shape are identical — th
 - `mcp__plugin_marshall_marshall__release_get` — confirm the release is seeded and read its
   `project_type` (drives the sweep categories) + existing components (so we
   don't duplicate in `add` mode).
-- `mcp__plugin_marshall_marshall__component_create` — file one confirmed component. Params:
-  `release` (version-or-slug), `title`, `branch_type`, `slug`, `deploy_safety`,
-  `breaking`, `notes`, and an **optional** generic `external_ref`
-  `{ provider, id, url }`. `source` defaults to `native` for store-born
-  components — don't override it. Add `project` only to disambiguate the same
-  version across projects.
+- `mcp__plugin_marshall_marshall__component_create` — file one confirmed component (the
+  **Confirmation loop** carries the call block). `source` defaults to `native` for store-born components —
+  don't override it. Add `project` only to disambiguate the same version across projects.
 - `mcp__plugin_marshall_marshall__component_update` — amend a component that is
-  **already filed**. Identified by its `component` id (ULID); every other field is
-  **optional** and only what you pass changes. Editable: `title`, `branch_type`,
-  `slug`, `deploy_safety`, `touches`, `breaking`, `notes`, and `external_ref`
-  (pass `external_ref: null` to unlink). `source` is identity and cannot change.
-  This is the fix for a typo'd title or a revised deploy-safety answer — **not** a
-  second `component_create` (see **Amending a filed component** below).
+  **already filed**, by its `component` id (ULID); `source` is identity and cannot
+  change. This is the fix for a typo'd title or a revised deploy-safety answer — **not**
+  a second `component_create` (see **Amending a filed component** below).
 
 If the MCP server isn't connected, **stop and say so** — the store is the only
 place the plan can land; do not fall back to filing GitHub issues or writing a

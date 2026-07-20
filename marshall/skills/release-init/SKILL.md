@@ -24,27 +24,20 @@ against a release that already exists **resumes** rather than duplicating.
 
 ## How it talks to the store
 
-- `mcp__plugin_marshall_marshall__project_list` — **every** project in the
-  workspace: the "what already exists here?" read, so a new bootstrap does not
-  duplicate a project that is already there under a slightly different name. Takes
-  **no arguments**. This is deliberately broader than `release_next`, which only
-  surfaces projects with unshipped startable work — `project_list` also shows a
-  project whose releases have **all shipped**, and an **empty** project with no
-  releases at all. Those two are exactly the ones a fresh init would otherwise
-  re-create. Archived projects are included and flagged (`archived: true`), and
-  each entry carries `slug`, `name`, `repo`, `tracker_kind`, a `release_summary`
-  (release counts by lifecycle phase) and `archived_releases`.
-- `mcp__plugin_marshall_marshall__project_create` — resolve-or-create the workspace project. The
-  external-tracker link — `repo` (owner/name) plus `tracker_kind` (github /
-  jira / linear) — lives **here** and is **optional**; a project does not
-  require a GitHub repo. If a project already matches in the current workspace
-  it is reused, not duplicated.
+- `mcp__plugin_marshall_marshall__project_list` — **every** project in the workspace
+  (takes **no arguments**), archived ones included and flagged `archived: true`.
+  Deliberately broader than `release_next`, which surfaces only projects with unshipped
+  startable work: it also shows a project whose releases have **all shipped**, and an
+  **empty** project with no releases at all — exactly the two a fresh init would
+  otherwise re-create.
+- `mcp__plugin_marshall_marshall__project_create` — resolve-or-create the workspace project;
+  reused, not duplicated, when one already matches. The external-tracker link
+  (`repo` + `tracker_kind`) lives **here** and is **optional** — a project does not
+  require a GitHub repo.
 - `mcp__plugin_marshall_marshall__release_get` — probe whether the release already exists under the
   project, so a re-run **resumes** instead of creating a second one.
-- `mcp__plugin_marshall_marshall__release_create` — create the release under the project from
-  `theme`, `version` (a version-or-slug like `v0.5.0`), and `out_of_scope`.
-  `slug` is derived from `version` when omitted. `source` is recorded as
-  `native` (vs `imported` for the GitHub-import path).
+- `mcp__plugin_marshall_marshall__release_create` — create the release under the project
+  (step 6 names the fields).
 
 Both creates are workspace-scoped and fail-closed — no cross-workspace create,
 no existence leak — matching the rest of the write path.

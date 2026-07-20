@@ -14,69 +14,55 @@ This is the Marshall-store port of `swarm-release-readiness` / `release-readines
 same lens mechanics and verdict rubric, but findings are durable store rows
 (kind `readiness`) rather than a local file.
 
-## How it talks to the store
+## The shared protocol, and what this skill binds
 
-- `mcp__plugin_marshall_marshall__release_get` — read the release: its components, its **existing
-  findings**, and its **lens selection** (`project.reviews.readiness.lenses`).
-  This is the state — there is no local file to read.
-- `mcp__plugin_marshall_marshall__lenses_get` — resolve the selected lens **definitions**
-  (`{ slugs: [...] }` → each lens's frontmatter + body). The store is the
-  catalog; there is **no `~/.claude/skills/_lenses` fallback**. Any slug it can't
-  resolve comes back as `lens_not_found` — surface it and stop.
-- `mcp__plugin_marshall_marshall__lenses_applicable` — pre-filter the selected lenses
-  against the release's changed-file set **before** fanning out one subagent per
-  lens (`{ slugs: [...], changed_paths: [...] }` → `{ applicable, skippable }`).
-  Read-only; run it between selection and `lenses_get`.
-- `mcp__plugin_marshall_marshall__record_findings` — **the default write**: record the
-  whole pass's findings in ONE atomic call
-  (`{ release, findings: [{ kind: "readiness", ref, severity, summary, rationale?, evidence?, component_id? }, ...] }`).
-- `mcp__plugin_marshall_marshall__record_finding` — the singular fallback, for a genuine
-  one-off recorded after the pass.
-- `mcp__plugin_marshall_marshall__resolve_findings` — **the default transition**: apply a
-  whole pass of resolutions in ONE atomic call
-  (`{ findings: [{ finding, status, rationale? }, ...] }`).
-- `mcp__plugin_marshall_marshall__resolve_finding` — the singular fallback for one named
-  finding (`{ finding, status, rationale? }`): `deferred | accepted | fixed | open`.
+Lens config, the store lifecycle, the lens fan-out and synthesis (steps 4 & 5), the
+severity gate, the verdict rubric, the output format, the post-review actions, and the
+guardrails are shared with `/marshall:change-review` and live once in
+**`../_shared/references/review-protocol.md`**. **Read it — it carries the steps this
+file does not repeat.** It is written against parameters; this skill binds them:
 
-(If the MCP server isn't connected, stop and say so — there is no local fallback
-for store findings *or* lenses.)
+| Token | release-readiness |
+| --- | --- |
+| `{{KIND}}` | `readiness` |
+| `{{VERDICT_BLOCKING}}` | **hold** |
+| `{{VERDICT_FOLLOWUPS}}` | **ship-with-followups** |
+| `{{VERDICT_CLEAR}}` | **ship** |
+| `{{BLOCKER_RIDER}}` | `broken CI, or an inverted conservative security/deploy default` |
+| `{{HOLD_RIDER}}` | `CI failing, or a fundamental migration/deploy mismatch` |
+
+Scope conditionals: this review is **release-wide, not component-scoped** — use
+`component_id` only when a finding is about one specific component, and the verdict
+header carries no component suffix. It **does pre-filter** the lens set with
+`lenses_applicable` before fanning out (Step 3).
+
+> The verdict vocabulary is deliberately **not** change-review's. Readiness ships or
+> holds a release; change review approves or requires changes to a component. Never
+> report a readiness review as `approve` / `changes-required`.
+
+## Store tools
+
+- `mcp__plugin_marshall_marshall__release_get` — the release: components, existing findings,
+  and the lens selection at `project.reviews.readiness.lenses`.
+- `mcp__plugin_marshall_marshall__lenses_applicable` — pre-filter, run **between** the
+  selection and `lenses_get` (Step 3); never fan out the raw selection.
+- `mcp__plugin_marshall_marshall__lenses_get` — the applicable lens definitions.
+- `mcp__plugin_marshall_marshall__record_findings` / `mcp__plugin_marshall_marshall__resolve_findings`
+  — **the defaults**: a whole pass of writes (Step 6), or of resolutions, in one atomic call.
+- `mcp__plugin_marshall_marshall__record_finding` / `mcp__plugin_marshall_marshall__resolve_finding`
+  — singular fallbacks, for a genuine one-off after the pass.
+
+Both resolve tools are driven from the shared protocol's **Post-review actions**.
 
 ## Config
 
-**Lens selection and definitions both come from the Marshall store — not local files.**
-
-- **Selection** — `release_get { release }` returns `project.reviews.readiness.lenses`,
-  the array of lens slugs for this release. If it is empty, no readiness lenses are
-  selected: **stop and say so** (set them with `set_release_lenses`), never review
-  with an empty lens set.
-- **Definitions** — `lenses_get { slugs }` returns each lens (frontmatter + body).
-  The store is authoritative; there is no `~/.claude/skills/_lenses/<slug>.md`
-  fallback. Any unresolved slug fails loud (`lens_not_found`) — surface it and
-  stop, never silently skip.
+Selection and definitions come from the store, per the shared protocol's **Lens config**
+(`project.reviews.readiness.lenses`; empty selection → stop, and set them with
+`set_release_lenses`).
 
 `.claude/release-config.json` is still read for non-lens fields only — `wrap.mode`
 (informational; verdict language matches deploy vs tag). Lifting the rest of
 release-config into the store is roadmapped separately.
-
-## The store is the state (no local file)
-
-Unlike the non-Marshall readiness skills, this one keeps **no** `release-state.json`.
-Open/deferred/accepted/fixed findings are read straight from the release document
-(`release_get` → `findings`, filtered to `kind: "readiness"`). Never create or
-write a local findings file here.
-
-### Status lifecycle (store-defined)
-
-The store enforces the lifecycle; this skill only ever asks for a legal move:
-
-- `open → deferred | accepted | fixed`
-- `deferred → accepted | fixed | open` (re-open)
-- `accepted` and `fixed` are **terminal**
-
-There is no `fixed-verified` status in the store — `fixed` is terminal. `verify`
-mode therefore re-examines and **reports**, but does not transition a finding.
-An illegal move (e.g. `fixed → open`) returns `invalid_finding_transition` from
-the store — surface it verbatim; never work around it.
 
 ## Review process
 
@@ -136,46 +122,23 @@ files the lenses care about. Know what changed before forming a view.
    definitions. Any `lens_not_found` → surface it verbatim and stop. There is no
    `~/.claude` fallback and no silent skip.
 
-### Step 4 — Run lenses: one subagent per lens, in parallel
+### Steps 4 & 5 — Run the lenses, then synthesise
 
-Fan out **one subagent per *applicable* lens, concurrently** — the `applicable`
-set from Step 3, not the raw selection — dispatched in a single message (one
-Task/Agent call per lens) so they run in parallel, then aggregate. Give each
-subagent:
-- the lens **`name`, `body`, and `related`** (from `lenses_get`) — `name` for
-  attributing its findings, `body` to run the lens, `related` for synthesis,
-- the release **context** (Step 2: commit log, changed files, CHANGELOG, relevant
-  migration/config files), and
-- the instruction below.
-
-Each subagent:
-- evaluates the lens `## Purpose` against the release context; if its "skip when"
-  condition fires, returns `skipped (not applicable)`.
-- otherwise walks `## Questions to ask`, scans `## Anti-patterns to flag`, anchors
-  against `## Examples` and `## Severity calibration`, and uses `## How findings
-  from this lens sound` to shape voice.
-- **returns** its candidate findings as structured data (severity, where, issue,
-  fix), attributed to the lens by its frontmatter `name`. It does **not** call
-  `record_finding` — recording is centralized in the parent (Step 6) so
-  reconciliation stays idempotent.
-
-Aggregate every subagent's findings before continuing.
-
-### Step 5 — Cross-lens synthesis
-
-Do one integration pass using each lens's `related:` array. When a finding was
-surfaced or sharpened by another lens, note it: `*(+ <lens-name> via synthesis)*`.
+Follow **`../_shared/references/review-protocol.md` → "Running the lenses"**: one
+subagent per **applicable** lens (the `applicable` set from Step 3, not the raw
+selection) dispatched in a single message, each returning structured candidate findings
+(never recording them itself), then one cross-lens synthesis pass using each lens's
+`related:` array. Give each subagent the release **context** from Step 2 — commit log,
+changed files, `CHANGELOG.md`, relevant migration/config files.
 
 ### Step 6 — Reconcile against the store, then record the pass in ONE call
 
-Recording is **not idempotent** — calling it again writes another row. So
-before recording, reconcile each fresh finding against the existing store
-findings loaded in Step 1:
+Reconcile each fresh finding against the existing readiness findings loaded in Step 1,
+per the shared protocol's **Recording semantics**:
 
-- **Semantic match to an existing `open` or `deferred` readiness finding**
-  (same underlying issue — match on summary/component, not the `ref`, which
-  renumbers each run) → **do not record again**. Surface it as already-tracked,
-  carrying its existing status and id.
+- **Semantic match to an existing `open` or `deferred` readiness finding** (same
+  underlying issue — match on summary/component, not the `ref`) → **do not record
+  again**. Surface it as already-tracked, carrying its existing status and id.
 - **Match to an `accepted` or `fixed` finding** → suppress (already resolved),
   unless the issue has genuinely regressed — then record a new one and say so.
 - **No match** → it goes in the batch (below). Use `component_id` only when the
@@ -197,152 +160,12 @@ mcp__plugin_marshall_marshall__record_findings {
 six lenses is one round trip, not one per finding, and the ack is minimal
 (`{ recorded, findings: [{ id, ref, kind, severity, status, component_id }] }`)
 instead of a full release document per write. `release` is passed once at the top
-level; every finding in the batch belongs to it.
+level; every finding in the batch belongs to it. Use `record_finding` only for a
+genuine one-off after the pass.
 
-The batch is **all-or-nothing**: one invalid item rolls the whole thing back with
-`batch_item_failed` naming the item **by index** — never a partial write. Surface
-it verbatim, fix that item, re-send the whole batch; do not fall back to singular
-calls to route around it. Use `record_finding` only for a genuine one-off after
-the pass.
+### After Step 6
 
-Report which findings were newly recorded vs. already tracked. Recording twice in
-the same review run is the failure mode this step exists to prevent.
-
-## Severity gate
-
-- **high:** fix before shipping.
-- **medium:** fix now unless explicitly deferred with an owner.
-- **low:** may defer if documented.
-
-## Verdict and release impact rubric
-
-**Release impact**
-- **blocker:** any unmitigated `high`, inability to roll back safely, broken CI,
-  or an inverted conservative security/deploy default — unless accepted risk and
-  owner are explicitly recorded (as an `accepted` finding).
-- **non-blocker:** no open `high`, or each `high` has a recorded mitigation path.
-
-**Consolidated verdict**
-- **hold:** one or more `high` without documented mitigation, CI failing, or a
-  fundamental migration/deploy mismatch.
-- **ship-with-followups:** `medium`/`low` remain (or deferred `medium` with a
-  named owner), no blocker-level gap.
-- **ship:** no material findings; open gaps minor or absent; tradeoffs recorded.
-
-## Output format
-
-### Verdict (always first)
-
-## `<verdict>` · `<release impact>`
-- `N high` · `N medium` · `N low` · `N open gaps`
-- **Recorded:** N new readiness findings written to the store (or `none — all already tracked`).
-- **Passes:** only areas at risk given the changes that came back clean.
-- **Carry-forward:** `id` deferred · `id` accepted — omit if the store has none.
-
----
-
-### Findings (one H3 per finding, high → medium → low)
-
-### F1 · `<severity>` · `<Primary lens>` *(+ Secondary lens via synthesis)*
-- **Where:** [`path:line`](path) or `CHANGELOG.md` / migration / config
-- **Issue:** one sentence on what is wrong or risky.
-- **Fix:** one sentence concrete fix.
-- **Store:** `recorded <id>` (new) or `already tracked <id> (<status>)`.
-
-Separate findings with `---`. Omit the synthesis parenthetical if single-lens.
-
-### Open gaps (one H3 per gap)
-
-### OG1 · `<Lens>`
-One sentence on what cannot be verified and what would confirm or refute it.
-
-### Tradeoffs (inline)
-
-One line per tradeoff: **Chosen** — **Rejected** — **Rationale** — **Recorded in**.
-If none: `Tradeoffs: none identified.`
-
-If no fresh findings, write `No new findings.` after the verdict and still show
-any open/deferred store findings.
-
-## Post-review actions
-
-These map 1:1 onto `resolve_finding`. Resolve the `F#` the user names to its store
-`id` via the most recent review output or `release_get`.
-
-**When one instruction names more than one finding** — "defer R1 and R4, accept
-R2", or the wrap walking a whole readiness pass to terminal statuses — resolve
-them in one transaction:
-
-```
-mcp__plugin_marshall_marshall__resolve_findings {
-  findings: [
-    { finding: <id>, status: "deferred", rationale? },
-    { finding: <id>, status: "accepted", rationale? },
-    ...
-  ]
-}
-```
-
-Mixed target statuses are fine in one call. It is **all-or-nothing**: an unseeable
-finding fails with `finding_not_found` before any write; an illegal or no-op
-transition rolls the batch back with `batch_item_failed` naming the item by index
-and its `from`/`to`. Surface that verbatim and re-send the corrected batch —
-never decompose it into singular calls to get the legal ones through.
-
-The singular modes below are the shape of each item, and the tool for a single
-named finding.
-
-### Defer
-
-`"defer F3"` or `"defer F3 — migration ships in the next release"`:
-`resolve_finding { finding: <id>, status: "deferred", rationale }`.
-
-### Accept
-
-`"accept F2 — documented in runbook instead"`:
-`resolve_finding { finding: <id>, status: "accepted", rationale }`.
-Acceptance means no fix is planned; use defer when a fix is intended but not now.
-
-### Mark fixed
-
-`"mark F1 as fixed"` (optionally with a rationale):
-`resolve_finding { finding: <id>, status: "fixed", rationale? }`. Terminal.
-
-### Re-open
-
-`"re-open F3"` (only from `deferred`):
-`resolve_finding { finding: <id>, status: "open" }`. From a terminal status the
-store returns `invalid_finding_transition` — surface it; don't force it.
-
-### Verify
-
-`"verify F1 F2"`: re-examine the referenced findings against the current code and
-report `✓ resolved` / `✗ unresolved`. The store has no verified state — if a
-`fixed` finding is confirmed resolved, leave it `fixed` and say so; if a still-open
-finding is confirmed resolved, offer to `mark fixed`.
-
-### List
-
-`"show readiness findings"` / `"what's deferred"`: `release_get { release }`,
-filter `findings` to `kind: "readiness"`, group by status (open / deferred /
-accepted / fixed) with each finding's `id`, `ref`, `severity`, and `summary`.
-
-## Guardrails
-
-- Record only `kind: "readiness"` findings here. Change-review findings are
-  `/marshall:change-review`'s job (`kind: "change"`).
-- Reconcile before recording — never write a duplicate of a finding the store
-  already holds open.
-- **Batch by default.** The pass writes with `record_findings` and a multi-finding
-  instruction resolves with `resolve_findings`; the singular tools are for
-  one-offs. Looping the singular tool over a pass costs a round trip and a full
-  document per finding, and can half-write a pass the batch would have rolled back.
-- **Pre-filter before you fan out.** Always run `lenses_applicable` between
-  selection and `lenses_get`, and honor its verdict in both directions. No
-  narrowing is the expected answer against a coarse catalog — make the call
-  anyway; it starts paying the moment the catalog carries path globs.
-- **A `batch_item_failed` is a stop, not a retry loop.** Surface the named index,
-  fix that item, re-send the whole batch.
-- The store enforces the lifecycle. Ask only for legal transitions; surface
-  `invalid_finding_transition` verbatim rather than working around it.
-- The store is the source of truth — do not create a local readiness state file.
+Report per the shared protocol's **Output format** using this skill's vocabulary
+(`hold` / `ship-with-followups` / `ship`), then handle any
+defer/accept/fix/re-open/verify/list request per its **Post-review actions**, filtering
+to `kind: "readiness"`.

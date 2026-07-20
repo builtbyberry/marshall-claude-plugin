@@ -31,29 +31,26 @@ version — and never as "tidying up".
 
 Read first:
 
-- `mcp__plugin_marshall_marshall__project_list` — every project in the workspace,
-  **including archived ones** (flagged `archived: true`), each with a
-  `release_summary` and an `archived_releases` count. The read that tells you what
-  is already hidden before you hide more — or what there is to restore.
+- `mcp__plugin_marshall_marshall__project_list` — the workspace picture, **including
+  archived projects** (flagged `archived: true`). What is already hidden, before you
+  hide more — or what there is to restore.
 - `mcp__plugin_marshall_marshall__release_get` — a direct fetch still returns an
   archived release/component, carrying its `archived` flag. This is how you
   inspect something the discovery scan no longer shows.
 - `mcp__plugin_marshall_marshall__release_status` — live holds. A component with an
   active claim is someone's in-flight work; see the guardrails.
 
-Archive (reversible, available to **any workspace member**):
+Archive (reversible, available to **any workspace member**). An archived record drops
+out of the discovery scan (`release_next` / `release_status`); a direct `release_get`
+still returns it. Both parents are **refused** with `cannot_archive`, naming the
+blockers, while they hold an **active** child: a release, while any component is in
+`open` / `in_progress` / `proposed`; a project, while any release is neither shipped
+nor archived.
 
 - `mcp__plugin_marshall_marshall__archive_component { component }` — by ULID. A
-  component has no children, so this is **always allowed**. Hidden from
-  `release_next` / `release_status`.
-- `mcp__plugin_marshall_marshall__archive_release { release, project? }` — by
-  version-or-slug. Hidden from the discovery scan (`release_next`); a direct
-  `release_get` still returns it. **Refused** (`cannot_archive`, naming the
-  blockers) while the release has any **active** component — one in
-  `open` / `in_progress` / `proposed` and not archived.
+  component has no children, so this is **always allowed**.
+- `mcp__plugin_marshall_marshall__archive_release { release, project? }` — by version-or-slug.
 - `mcp__plugin_marshall_marshall__archive_project { project }` — by slug.
-  **Refused** (`cannot_archive`, naming the blockers) while the project has any
-  **active** release — one that is neither shipped nor archived.
 
 Unarchive (the exact inverses, also any workspace member):
 

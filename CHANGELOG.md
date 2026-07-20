@@ -8,6 +8,71 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
+## 1.2.0 — 2026-07-20
+
+Less of the same thing, said once.
+
+1.1.0 taught the skills to call everything the store offers. This release is
+about what they say while doing it. Two review skills carried ~285 lines of the
+same protocol in two copies that had already begun to drift, and thirteen skills
+carried paraphrases of tool descriptions the model already has in context — a
+strictly worse copy of the source of truth, in a place nothing checks. The net
+is **402 fewer lines** with no capability removed.
+
+It also picks up the store's new read-side opt-in, so a session can now go cheap
+on reads the way 1.1.0 made it go cheap on writes.
+
+### Added
+
+- **`skills/_shared/references/review-protocol.md`** — the plugin's first bundled
+  reference file, and the pattern for any that follow. `change-review` and
+  `release-readiness` are the same protocol with different nouns; the shared
+  steps now live here once instead of twice.
+
+  The two skills differ **deliberately** in six ways, and the most important is
+  their **verdict vocabulary**: a change review returns
+  `changes-required` / `approve-with-followups` / `approve`, a readiness review
+  returns `hold` / `ship-with-followups` / `ship`. The reference never picks one.
+  It is written against tokens each skill binds in its own *Protocol bindings*
+  table, with a guard callout in each — *"Never report a change review as
+  `ship` / `hold`"*, and the mirror image. Collapsing those into one vocabulary
+  would have been a regression wearing a cleanup's clothes. Verified by a
+  scripted survival check of 40 distinctive behavioural instructions across the
+  new corpus.
+
+  It also carries a **"What deliberately does NOT move into this file"** section,
+  because the constraint that makes it necessary is invisible: two CI gates in
+  the source repo read *only* files named `SKILL.md`. Three tools
+  (`lenses_get`, `lenses_applicable`, `set_release_lenses`) are named by no other
+  skill, and each skill's `record_findings` block is asserted verbatim. Moving
+  those into a reference turns CI red with nothing pointing at why.
+
+### Changed
+
+- **`release-topic` now sets both response defaults for the session** —
+  `set_default_return { "minimal" }` *and* the store's new
+  `set_default_view { "summary" }`. Until now the write side could opt into small
+  payloads while every read still paid for a full document. A fresh actor that
+  never calls them is byte-unchanged, and an explicit per-call `view` or `return`
+  still wins.
+- **The store-tool prose across nine skills is trimmed from 301 lines to 255.**
+  The intent was to cut it to about 60. That was not reachable and the diff was
+  not padded to pretend otherwise: after the extraction above, these sections are
+  roughly 40% callable tool names that CI depends on, 40% load-bearing prose that
+  only looks like duplication — ordering rules, error codes such as
+  `cannot_archive` and `deploy_blocked`, and the "stop and say so" clauses — and
+  only about a fifth genuine paraphrase. Only that fifth was cut. Four skills
+  were left alone entirely because they were already bare lists.
+
+  What survives is deliberate: every `mcp__…` callable name, every ordering rule
+  (`lenses_applicable` before `lenses_get`; the deploy and ship step sequences),
+  every failure mode, and the batch-by-default policy.
+
+Requires the Marshall store at **v0.18.0** or later, live at
+[releasemarshall.com](https://releasemarshall.com) — `set_default_view` does not
+exist before it. Nothing in your repository changes: `state.backend` is still the
+literal `"srm"`, and `php artisan srm:import-release` keeps its name.
+
 ## 1.1.0 — 2026-07-19
 
 The skills catch up to the store.

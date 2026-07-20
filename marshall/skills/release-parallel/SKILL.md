@@ -36,32 +36,22 @@ sit side by side — the run never duplicates drift or re-implements the lock.
 - `mcp__plugin_marshall_marshall__dispatch_report` — a member reports its status
   (`dispatched | in_progress | proposed | merged | failed`) plus an optional
   last-progress note. Targets the **member id** (`members[].id` from the run, the
-  dispatch_member ULID — not the component id). One call per meaningful checkpoint.
-  `merged` is the only terminal status; `failed` records that one **attempt**
-  ended and can be retried to any forward status (see **Resume**). Each member
-  also carries `failures` {count, last_at, last_note}, stamped when it enters
-  `failed` and never cleared — so a retried member reports an accurate current
-  status without the board forgetting the attempt failed.
+  dispatch_member ULID — **not** the component id). One call per meaningful checkpoint.
+  `merged` is the only terminal status; `failed` records that one **attempt** ended and
+  can be retried to any forward status (see **Resume**).
 - `mcp__plugin_marshall_marshall__dispatch_reports` — the **batch** counterpart, and the
-  orchestrator's default when it is moving **several members at once**
-  (`{ reports: [{ member, status, note? }, ...] }`). One transaction for the whole
-  wave instead of a round trip per member. Members may belong to different runs —
-  a report is addressed by member id, not by run.
+  orchestrator's default when it is moving **several members at once**. One transaction
+  for the whole wave instead of a round trip per member. Members may belong to different
+  runs — a report is addressed by member id, not by run.
 - `mcp__plugin_marshall_marshall__dispatch_get` — read a run's per-member status directly (the same
   data `release_get` inlines); the resume + status-board read.
-- `mcp__plugin_marshall_marshall__dispatch_close` — give a **stuck or abandoned run**
-  a clean run-level terminal `closed` signal, so it drops out of the release's
-  "active" summaries instead of lingering forever (`{ run, reason? }`). **Manual
-  close only** — a run never closes itself by member aggregation, and closing
-  **does not** touch member rows, change any member status, or merge any
-  component. Re-closing an already-closed run fails loud with
-  `dispatch_already_closed`. See **Closing a run** below.
+- `mcp__plugin_marshall_marshall__dispatch_close` — the **manual** run-level terminal signal, for a
+  finished or abandoned run. A run never closes itself by member aggregation. See
+  **Closing a run** below.
 - `mcp__plugin_marshall_marshall__heartbeat_claim` / `mcp__plugin_marshall_marshall__release_claim` — the per-component lock
   lifecycle. The wave does **not** claim members itself: each member's claim is
   taken once by `/marshall:release-topic` during per-member setup (it claims, then cuts
   the branch/worktree), and the subagent heartbeats that claim while it works.
-  `claim_component` throws `claim_conflict` on any live re-claim — even by the same
-  holder — so the claim stays under a single owner.
 
 If the MCP server isn't connected, **stop and say so** — the `dispatch_run` is
 the only place a wave is durable; never drive a fan-out from conversation memory

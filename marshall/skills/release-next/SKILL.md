@@ -20,9 +20,6 @@ whatever the user actually gave you.
 
 ## How it talks to the store
 
-This plugin connects the Marshall MCP server (configured with your store URL + token
-when you enabled the plugin). Use its tools directly:
-
 - `mcp__plugin_marshall_marshall__release_next` — startable work, ranked by what it unblocks
 - `mcp__plugin_marshall_marshall__release_status` — who holds what + drift
 - `mcp__plugin_marshall_marshall__release_get` — the full release document

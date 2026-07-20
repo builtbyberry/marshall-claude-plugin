@@ -9,6 +9,7 @@
     "marshall/commands/release-status.md",
     "marshall/hooks/hooks.json",
     "marshall/scripts/session-start.sh",
+    "marshall/skills/_shared/references/review-protocol.md",
     "marshall/skills/change-review/SKILL.md",
     "marshall/skills/release-admin/SKILL.md",
     "marshall/skills/release-deploy/SKILL.md",

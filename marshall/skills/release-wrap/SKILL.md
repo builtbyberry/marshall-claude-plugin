@@ -33,10 +33,8 @@ no UPGRADING.md (those belong to the tag-mode file-based wrap).
   still held, and which have **drifted** (a hold that went quiet and silently
   reopened). Use it to catch a component that looks done but isn't truly merged.
 - `mcp__plugin_marshall_marshall__release_changelog` — emit the release's CHANGELOG section
-  **from store data**: every non-archived, non-cancelled component grouped into
-  Added / Changed / Fixed by `branch_type` (`feat`→Added, `fix`→Fixed,
-  `chore`/`refactor`/`perf`→Changed), under the release theme, in the house
-  format. Read-only. This is what Step 2 writes.
+  **from store data**, grouped Added / Changed / Fixed under the release theme.
+  Read-only. This is what Step 2 writes.
 - `mcp__plugin_marshall_marshall__record_findings` / `mcp__plugin_marshall_marshall__resolve_findings`
   (and their singular siblings) — driven by the composed review skills, not called
   directly here. The wrap **reads** the findings they produce to drive the gate.

@@ -25,25 +25,28 @@ machines.
   `mcp__plugin_marshall_marshall__set_component_states` — move the work-state; the second is
   the batch counterpart for landing several at once (step 5).
 
-## Session setup — set the return verbosity once
+## Session setup — set the verbosity once, both directions
 
-At the **start of a working session**, set this actor's write-return default once
-so every subsequent write comes back as the affected entity instead of the whole
-release document:
+At the **start of a working session**, set this actor's write-return and
+read-view defaults once, so every subsequent write comes back as the affected
+entity instead of the whole release document, and every subsequent read comes
+back as the index instead of the whole document:
 
 ```
 mcp__plugin_marshall_marshall__set_default_return { default_return: "minimal" }
+mcp__plugin_marshall_marshall__set_default_view   { default_view: "summary" }
 ```
 
-This is a **stored per-actor preference**, not a per-call flag — set it once, not
-before every write, and never in a loop. It applies to this actor across the
-session; an explicit `return` on any individual call still wins over it, so a
-step that genuinely needs the whole document (reading the newly-unblocked wave
-after a `merged`) can still ask for `return: "full"` inline.
+These are **stored per-actor preferences**, not per-call flags — set them once,
+not before every call, and never in a loop. They apply to this actor across the
+session; an explicit `return` (writes) or `view` (reads) on any individual call
+still wins over the stored default, so a step that genuinely needs the whole
+document (reading the newly-unblocked wave after a `merged`) can still ask for
+`return: "full"` / `view: "full"` inline.
 
-Restore the whole-document default with `{ default_return: "full" }` when a
-session wants full payloads back. A fresh actor that never calls this is
-byte-unchanged — `full` is the default.
+Restore the whole-document defaults with `{ default_return: "full" }` and
+`{ default_view: "full" }` when a session wants full payloads back. A fresh actor
+that never calls either is byte-unchanged — `full` is the default on both sides.
 
 ## Procedure
 

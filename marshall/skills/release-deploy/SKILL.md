@@ -17,18 +17,14 @@ re-shipping prod.
 - `mcp__plugin_marshall_marshall__release_get` — read the release + its **deploy** block (the
   authoritative `step`, `smoke_ok`, `monitor`, `verdict`). Read it on **every**
   invocation; never trust prior conversation memory for where the deploy is.
-- `mcp__plugin_marshall_marshall__set_deploy_step` — **deploy mode.** Start (`step: merging`) or
-  advance the deploy one legal step (`deploying → smoke → monitor → done`),
-  carrying evidence (`merged_by`, `merge_sha`, `deploy_url`, `smoke_ok`,
-  `monitor`, `verdict`). The store enforces one deploy per release, legal forward
-  transitions, the readiness gate, and an atomic audit row — you only supply the
-  next step + evidence.
+- `mcp__plugin_marshall_marshall__set_deploy_step` — **deploy mode.** Start (`step: merging`)
+  or advance one legal step: `deploying → smoke → monitor → done`. The store enforces
+  one deploy per release, the forward-only order, and the readiness gate — you only
+  supply the next step plus the evidence each step below names.
 - `mcp__plugin_marshall_marshall__set_ship_step` — **tag mode.** The same progression for a
   release that ships as a tagged package rather than a deploy:
-  `merging → dating → tagging → releasing → done`, carrying `merged_by`,
-  `merge_sha`, `changelog_date`, `tag`, `release_url`, `verdict`. Same one-record,
-  same readiness gate, same `invalid_transition` on a skipped or reversed step.
-  See **Tag mode** below.
+  `merging → dating → tagging → releasing → done`. Same one record, same readiness
+  gate, same `invalid_transition` on a skipped or reversed step. See **Tag mode** below.
 
 If the MCP server isn't connected, **stop and say so** — the store's Deploy
 record is the only source of truth for where the deploy is; never drive a deploy
