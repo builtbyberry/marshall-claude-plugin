@@ -2,7 +2,7 @@
     "mcpServers": {
         "marshall": {
             "type": "http",
-            "url": "https://release-manager.swarmplatform.cloud/mcp"
+            "url": "https://releasemarshall.com/mcp"
         }
     }
 }

@@ -8,17 +8,20 @@ description: "Plan a release straight into the shared Marshall store: run the st
 Turn a release theme into a fully-scoped set of components **in the shared Marshall
 store**. This is the marquee planning skill: it runs the structured planning
 conversation and writes each confirmed component **straight to the store** via
-`component_create`. It is **pure-store** — it files **no** GitHub issues and
+`component_create`. It is **pure-store** — it files **no** tracker issues and
 writes **no** `release-plan.json`. The store is the single source of truth, so
 the moment a component is confirmed it is live on the release-detail screen and
 graphable by `/marshall:release-graph`.
 
-This is the Marshall-native counterpart to the GitHub-seeded `/release-plan` (which
-files milestone issues and writes a local state file). That one stays for repos
-that want GitHub-tracked issues; this one is for releases that live in Marshall
-end-to-end. The conversation and the strict component shape are identical — the
-**only** difference is the write target: `component_create` instead of
-`gh issue create` + a JSON file.
+It is the planning path for releases that live in Marshall end-to-end. The
+alternative is not another planning skill — it is to let the components arrive from
+a tracker instead, by filing the issues there (a GitHub milestone, a Linear Project
+or Cycle) and importing the collection, which stamps each imported component
+`source: imported` and back-links it in `external_ref`. Plan here when the work is
+born in the store; import when it already exists in a tracker. The two mix on one
+release: a `native` component filed from this skill sits beside an imported one, and
+a re-import adopts a native component that matches an issue rather than duplicating
+it.
 
 ## How it talks to the store
 
@@ -34,12 +37,14 @@ end-to-end. The conversation and the strict component shape are identical — th
   a second `component_create` (see **Amending a filed component** below).
 
 If the MCP server isn't connected, **stop and say so** — the store is the only
-place the plan can land; do not fall back to filing GitHub issues or writing a
+place the plan can land; do not fall back to filing tracker issues or writing a
 local file. That would defeat the pure-store path.
 
-There is **no** store-side "create release" tool by design. If the release isn't
-seeded yet, the fix is `/marshall:release-init` (or `srm:import-release` for a
-GitHub-tracked milestone) — not a write from here.
+**This skill never creates the release, only its components.** If the release isn't
+seeded yet, the fix is `/marshall:release-init` (`release_create`), or importing the
+collection that backs it — `php artisan srm:import-release <repo> <milestone>` for
+GitHub, the web picker at `/releases/import` for any tracker with a driver
+behind it. Not a write from here.
 
 ## Invocation
 
@@ -62,7 +67,9 @@ accept that and prompt for it during the conversation.
 2. **Confirm the release is seeded.** `mcp__plugin_marshall_marshall__release_get { release }`.
    - **Found** → continue; note its `project_type` and existing components.
    - **Not found** → stop. The release must exist first: point the user at
-     `/marshall:release-init` (native) or `srm:import-release` (GitHub-tracked). Do
+     `/marshall:release-init` (native), or an import of the collection that backs it
+     (`srm:import-release` for GitHub, `/releases/import` for a tracker with a
+     driver behind it). Do
      **not** try to create the release from here.
 3. If `release_get` already returns components for this release and the user did
    **not** ask for `add` mode, say so and ask whether they want to **add** more
@@ -131,9 +138,9 @@ nothing, that's a valid answer — move on.
 
 ## The component shape (strict)
 
-Every component lands with the **same strict shape** as the GitHub issue
-template, minus the GitHub round-trip. Draft each one for confirmation like
-this, then map it onto `component_create`:
+Every component lands with the **same strict shape**, whatever tracker (if any)
+the project is linked to. Draft each one for confirmation like this, then map it
+onto `component_create`:
 
 ```
 Title:        <imperative, scannable — e.g. "swarm:trace forensic CLI">
@@ -151,12 +158,13 @@ Notes:        <Goal + Acceptance Criteria + Out-of-scope, in prose/bullets —
 External ref: <optional — see below>
 ```
 
-`notes` carries the body that the GitHub template spread across `## Goal`,
-`## Acceptance Criteria`, and `## Out of Scope`. Keep it structured (a short
-Goal paragraph, then `- [ ]` acceptance bullets, then an out-of-scope line) so
-the component reads the same on the release-detail screen as a GitHub issue
-would. Always include a `CHANGELOG entry under <release>` and a `Docs updated:`
-bullet in the acceptance criteria, matching house convention.
+`notes` carries the whole body in one field — Goal, Acceptance Criteria and Out of
+Scope, which a tracker would have spread across separate headings. Keep it
+structured (a short Goal paragraph, then `- [ ]` acceptance bullets, then an
+out-of-scope line) so a store-native component reads on the release-detail screen
+exactly like an imported one, whose `notes` come from the issue description.
+Always include a `CHANGELOG entry under <release>` and a `Docs updated:` bullet in
+the acceptance criteria, matching house convention.
 
 ### Optional external-tracker link
 
@@ -168,7 +176,15 @@ If they want one, capture `external_ref`:
 - `id` — the issue key/number (e.g. `52`, `PROJ-123`)
 - `url` — the full link
 
-This is a stored link only — Marshall augments the tracker, it does not sync with it.
+**`provider` is load-bearing on exactly one path, so don't guess it.** When the
+component reaches `merged`, Marshall closes the linked issue only if this
+`provider` **matches the tracker the project resolves to**; a mismatch closes
+nothing and logs it. So a ref stamped `jira`, or
+stamped `github` on a project that now reads Linear, is a link that will never
+write back. Only `github` and `linear` have a driver that can close at all.
+
+Beyond that one path this is a stored link only — Marshall augments the tracker, it
+does not sync with it.
 Skip it by default; most store-native components won't have one. Omit
 `external_ref` entirely when skipped.
 
@@ -273,12 +289,14 @@ When the loop finishes, print:
 
 ## Guardrails
 
-- **Pure-store, always.** Never file a GitHub issue and never write
+- **Pure-store, always.** Never file a tracker issue and never write
   `release-plan.json` (or any local state) from this skill. The store is
-  authoritative. The GitHub-seeded `/release-plan` is the separate path for
-  repos that want issues — don't blend the two.
+  authoritative. A team that wants its issues in a tracker files them there and
+  **imports** the collection — that is the separate path, and it is an import, not
+  another planning skill. Don't blend the two in one sitting.
 - **Never create the release here.** If `release_get` is empty, the fix is
-  `/marshall:release-init` / `srm:import-release`, not a write from this skill.
+  `/marshall:release-init`, or an import (`srm:import-release` for GitHub, the web
+  picker for a tracker with a driver behind it) — not a write from this skill.
 - **One component per `component_create`, each behind its own `yes`.** No
   batch-create, no auto-filing the whole sweep.
 - **Per-cluster conversation.** Don't dump every question at once — theme, then

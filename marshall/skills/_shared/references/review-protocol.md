@@ -33,7 +33,7 @@ out of a `SKILL.md` stops counting as covered and the build goes red:
 
 - **Each skill's `## Store tools` roster.** Every tool must be named in the callable
   `mcp__plugin_marshall_marshall__<tool>` form inside a `SKILL.md`. `lenses_get`,
-  `lenses_applicable` (readiness) and `set_release_lenses` (change-review) are covered by
+  `lenses_applicable` (both) and `set_release_lenses` (change-review) are covered by
   *these two skills alone* — move them here and no skill references them.
 - **Each Step 6's `record_findings { release, … }` call block** and the sentence
   "do not loop `record_finding` per finding". Both are asserted verbatim, per skill, so

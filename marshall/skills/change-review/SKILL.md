@@ -33,9 +33,9 @@ file does not repeat.** It is written against parameters; this skill binds them:
 | `{{HOLD_RIDER}}` | `or a fundamental design/API/changelog mismatch` |
 
 Scope conditionals: this review **is component-scoped** — every finding carries a
-`component_id`, and the verdict header gains ` · component <ref>`. It **does not
-pre-filter**: there is no `lenses_applicable` step here, so fan out the whole resolved
-selection.
+`component_id`, and the verdict header gains ` · component <ref>`. It **does pre-filter**
+the lens set with `lenses_applicable` before fanning out (Step 3), exactly as readiness
+does.
 
 > The verdict vocabulary is deliberately **not** readiness's. Change review approves or
 > requires changes to a component; readiness ships or holds a release. Never report a
@@ -45,7 +45,9 @@ selection.
 
 - `mcp__plugin_marshall_marshall__release_get` — the release: components (for `component_id`
   scoping), existing findings, and the lens selection at `project.reviews.change.lenses`.
-- `mcp__plugin_marshall_marshall__lenses_get` — the selected lens definitions.
+- `mcp__plugin_marshall_marshall__lenses_applicable` — pre-filter, run **between** the
+  selection and `lenses_get` (Step 3); never fan out the raw selection.
+- `mcp__plugin_marshall_marshall__lenses_get` — the applicable lens definitions.
 - `mcp__plugin_marshall_marshall__record_findings` / `mcp__plugin_marshall_marshall__resolve_findings`
   — **the defaults**: a whole pass of writes (Step 6), or of resolutions, in one atomic call.
 - `mcp__plugin_marshall_marshall__record_finding` / `mcp__plugin_marshall_marshall__resolve_finding`
@@ -147,18 +149,50 @@ files the lenses care about. Know what changed before forming a view.
 
 ### Step 3 — Resolve lenses from the store
 
-Take `project.reviews.change.lenses` from the Step-1 `release_get`; if empty, **stop**.
-Then `mcp__plugin_marshall_marshall__lenses_get { slugs: <those slugs> }` to fetch the
-definitions. Any `lens_not_found` → surface it verbatim and stop. There is no pre-filter
-step in change review — fan out every resolved lens.
+1. Take `project.reviews.change.lenses` from the Step-1 `release_get`; if empty,
+   **stop**: no change lenses are selected for this release (set them with
+   `set_release_lenses`). Never review with an empty lens set.
+2. **Pre-filter against the component's changed files before spawning anything.** The
+   fan-out is one subagent per lens, so a lens that cannot apply to these files costs a
+   whole subagent to read the diff and conclude "not applicable".
+
+   ```
+   mcp__plugin_marshall_marshall__lenses_applicable {
+     slugs: <the selected slugs>,
+     changed_paths: <the changed files from Step 2>
+   }
+   ```
+
+   It returns `applicable` (fan these out) and `skippable` (safe to drop). The store is
+   **conservative by construction**: a lens with no `applies_to`, or one carrying a
+   coarse project-kind token (`all` / `app` / `package`), is always applicable. Only a
+   lens whose `applies_to` is *entirely* file-scoping globs, with none matching any
+   changed path, comes back skippable — so a relevant lens is never dropped.
+
+   **Trust the verdict in both directions.** Never skip a lens the store called
+   applicable, and never re-add one it called skippable because it "feels relevant" —
+   the conservatism is already in the query. Report the narrowing
+   (`fanning out N of M lenses; skipped: <slugs>`) so a surprising skip is visible
+   rather than silent. If the changed-file list is empty or unknown, pass nothing and
+   fan out everything.
+
+   A component diff is the case where this pays most, because a component is usually
+   one layer: a backend-only component skips every lens whose `applies_to` is purely
+   frontend globs, and a frontend-only one skips the reverse. Expect **no narrowing**
+   where the catalog still uses coarse kind-tokens — that is the pre-filter working
+   correctly against un-enriched data, not a failure.
+3. `mcp__plugin_marshall_marshall__lenses_get { slugs: <the applicable slugs> }` to fetch
+   the definitions. Any `lens_not_found` → surface it verbatim and stop. There is no
+   `~/.claude` fallback and no silent skip.
 
 ### Steps 4 & 5 — Run the lenses, then synthesise
 
 Follow **`../_shared/references/review-protocol.md` → "Running the lenses"**: one
-subagent per resolved lens dispatched in a single message, each returning structured
-candidate findings (never recording them itself), then one cross-lens synthesis pass
-using each lens's `related:` array. Give each subagent the component **diff** and
-changed-file list from Step 2.
+subagent per **applicable** lens (the `applicable` set from Step 3, not the raw
+selection) dispatched in a single message, each returning structured candidate findings
+(never recording them itself), then one cross-lens synthesis pass using each lens's
+`related:` array. Give each subagent the component **diff** and changed-file list from
+Step 2.
 
 ### Step 6 — Reconcile against the store, then record the pass in ONE call
 
