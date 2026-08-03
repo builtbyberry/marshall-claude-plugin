@@ -8,6 +8,89 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
+## 1.4.0 — 2026-08-03
+
+The tracker stops being GitHub.
+
+Marshall's store has always been tracker-agnostic in principle. The skills were
+not: they told you to seed a release from a GitHub milestone, offered a tracker
+link naming three providers as though all three worked, and pointed at
+counterpart skills that no longer exist. With a second driver (Linear) shipping
+in the store this release, that prose stopped being merely dated and started
+being wrong.
+
+The sweep is deliberately **honest rather than uniformly generalized** — three of
+these surfaces really are still GitHub-only, and saying otherwise would have
+replaced a stale sentence with a false one.
+
+### Changed
+
+- **`release-open` no longer promises a tracker link it cannot make.** Step 9's
+  `release_update { milestone_number }` is an *integer* that derives a
+  `github.com/<repo>/milestone/<n>` URL — it is the store's only post-hoc tracker
+  link and it cannot describe a Linear collection. The skill now asks only on a
+  GitHub-tracked project and skips otherwise, rather than improvising. A
+  Linear-tracked release takes its `tracker_url` from the driver at import.
+- **Every "seed it from a GitHub milestone" pointer now names both import paths
+  and which tracker each serves.** `srm:import-release` is GitHub-only by
+  construction (it reads through the `gh` CLI and takes an `owner/name`
+  argument); the web picker serves any tracker that has a driver behind it.
+- **`release-init`'s external-tracker offer stopped over-promising.** It named
+  `github/jira/linear` as if all three worked. The store validates all three, but
+  `jira` has **no driver** and resolves to the fail-closed no-op — and `linear`
+  is conditional on two deployment flags that both ship off. The skill now says
+  so instead of implying that setting `tracker_kind` wires anything up.
+- **`release-plan` gained the one place `external_ref.provider` is load-bearing.**
+  The merge write-back closes a linked issue only when that provider matches the
+  tracker the project resolves to, so a ref stamped `jira` — or `github` on a
+  project since re-pointed at Linear — is a link that will never write back.
+- **Three "counterpart skill" pointers removed.** `release-init`, `release-plan`
+  and `release-parallel` each described themselves as the counterpart to a
+  "GitHub-seeded" skill of the same name. This plugin has exactly one of each.
+  Worth naming as a class: a *contrast with a named alternative* is the sentence
+  most likely to outlive what it points at, because nothing breaks when the
+  alternative goes and no test reads it. Each is now a contrast with the import
+  seam, which is a path that still exists.
+- **Skills stopped citing `docs/operator-runbook.md`.** That path does not exist
+  for anyone who installs this plugin — the same defect class as the three
+  pointers above, introduced while fixing them. Where a skill needs to name a
+  deployment setting it now names the setting.
+
+### Fixed
+
+- **The bundled MCP endpoint moved to `https://releasemarshall.com/mcp`.**
+  **Installs at 1.3.0 and earlier keep using
+  `release-manager.swarmplatform.cloud`, which continues to serve them** — a
+  published version's endpoint is baked in and cannot be re-pointed. Nothing is
+  required of you; a fresh install or an upgrade to 1.4.0 picks up the new host.
+
+## 1.3.0 — 2026-07-20
+
+Tag mode gets a wrap.
+
+**Written retroactively on 2026-08-03.** 1.3.0 was published without its entry
+here, which this file's own preamble says must not happen — the heading and tag
+have to match what the render declares. Recorded now rather than left as a hole
+between 1.2.0 and 1.4.0.
+
+### Changed
+
+- **`release-wrap` drives tag mode, not just deploy.** It was the last release
+  skill still deploy-only: it refused every `wrap.mode: tag` project and
+  redirected to a file-based tag-mode wrap that no longer exists anywhere. A
+  Composer package that tags to Packagist could plan, open, review and ship, but
+  had no wrap path at all. The skill now drives both progressions in one file,
+  mirroring `release-deploy`. The all-merged precondition, per-component
+  change-review, readiness, and the high-severity gate are mode-independent and
+  unchanged; only the CHANGELOG mechanics and the hand-off fork.
+- **In tag mode the wrap leaves the CHANGELOG heading undated.** `release-deploy`'s
+  `dating` step owns the date, ordered before `tagging` so the tag can never
+  point at a commit whose CHANGELOG still says "unreleased". An undated heading
+  after a finished tag-mode wrap is correct, not an oversight.
+- **Whether a release needs UPGRADING notes is derived from the components'
+  `breaking` flags**, not read from a config key — more accurate than a static
+  per-project boolean, and it needed no store change.
+
 ## 1.2.0 — 2026-07-20
 
 Less of the same thing, said once.

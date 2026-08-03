@@ -96,7 +96,7 @@ End with:
   lifecycle is a deliberate next step.
 - Do not invent startability. If `release_next` returns nothing, the answer is
   "nothing is startable, here's why" — never relax the server's verdict.
-- If a graph is `unverified`, say so plainly: that release needs `/release-graph`
+- If a graph is `unverified`, say so plainly: that release needs `/marshall:release-graph`
   before work is safe to start (the store's fail-safe default).
 - Scanning covers **unshipped** releases only — a shipped release has no work left
   to recommend. Naming one explicitly still reports on it.

@@ -1,23 +1,21 @@
 ---
 name: release-init
-description: "Bootstrap a project and release directly in the shared Marshall store — born-in-the-store, no GitHub round-trip. Resolve-or-create the workspace project, create the release (theme, version-or-slug, out_of_scope), and offer an optional external-tracker link. Use when the user says /release-init, bootstrap a release in the store, create a project and release in Marshall, start a release from scratch, or init a release without a GitHub milestone."
+description: "Bootstrap a project and release directly in the shared Marshall store — born-in-the-store, no tracker round-trip. Resolve-or-create the workspace project, create the release (theme, version-or-slug, out_of_scope), and offer an optional external-tracker link. Use when the user says /release-init, bootstrap a release in the store, create a project and release in Marshall, start a release from scratch, or init a release without a GitHub milestone."
 ---
 
 # Release Init (Marshall)
 
 Bootstrap a release the Marshall-native way: **create the project and release
-directly in the shared store** through its write-path tools, with zero GitHub
+directly in the shared store** through its write-path tools, with zero tracker
 round-trip. The operator names a theme and a version-or-slug and walks away with
 a live release in Marshall.
 
-This is the Marshall-native counterpart to the GitHub-seeded `/release-init`. That
-one scaffolds a repo's `.claude/release-config.json` and expects the release to
-enter Marshall later via a GitHub milestone + `php artisan srm:import-release`. This
-one is **born-in-the-store**: it calls `project_create` / `release_create`
-directly, so the release exists in Marshall the moment you finish — no milestone, no
-import. Marshall *augments* external trackers, it doesn't replace them, so an external
-link (GitHub/Jira/Linear) is **offered but optional** — the store is the source
-of truth.
+It is the **born-in-the-store** path: it calls `project_create` / `release_create`
+directly, so the release exists in Marshall the moment you finish — no tracker
+collection, no import. The alternative is to let the release enter Marshall from a
+tracker instead (a GitHub milestone, a Linear Project or Cycle) via the import seam
+below. Marshall *augments* external trackers, it doesn't replace them, so an
+external link is **offered but optional** — the store is the source of truth.
 
 It is **create-only and additive**: it never edits or deletes, and re-running
 against a release that already exists **resumes** rather than duplicating.
@@ -44,11 +42,14 @@ no existence leak — matching the rest of the write path.
 
 **If the write-path tools aren't available** (an older store, pre plan-write-path),
 `project_create` / `release_create` won't be exposed by the connected MCP server.
-**Stop and point at the import seam** rather than improvising: create a GitHub
-milestone + issues and run `php artisan srm:import-release <repo> <milestone>` on
-the server (or use the GitHub-seeded `/release-init` + import flow). Do not try to
-fabricate the project/release any other way — the store is the only place they can
-be born.
+**Stop and point at the import seam** rather than improvising: build the collection
+in the tracker (a GitHub milestone + issues, a Linear Project or Cycle) and import
+it. **The two trackers import differently** — GitHub can go through the console,
+`php artisan srm:import-release <repo> <milestone>` on the server, or the web
+picker; Linear has **no console equivalent** (`srm:import-release` reads through the
+`gh` CLI and takes an `owner/name` argument) and imports from the web picker at
+`/releases/import`. Do not try to fabricate the project/release any other way — the
+store is the only place they can be born.
 
 ## Procedure
 
@@ -81,12 +82,28 @@ be born.
 4. **Resolve-or-create the project — and offer the optional external-tracker
    link here.**
    `mcp__plugin_marshall_marshall__project_create { name: "<project>", repo?: "<owner/repo>",
-   tracker_kind?: "github | jira | linear" }`.
-   - The external-tracker link lives on the **project**: `repo` (owner/name)
-     plus `tracker_kind` (github / jira / linear). Ask whether to link one;
-     make clear it is **skippable** and that the store is the source of truth —
-     it's a stored link only, no GitHub/Jira/Linear API call, no bidirectional
+   tracker_kind?: "github | linear | jira" }`.
+   - The external-tracker link lives on the **project**: `repo` (the container —
+     `owner/name` on GitHub; a tracker with no container concept, such as Linear,
+     doesn't need one) plus `tracker_kind`. Ask whether to link one; make clear it
+     is **skippable** and that the store is the source of truth — `project_create`
+     stores the link, it makes no tracker API call and sets up no bidirectional
      sync. If the operator skips, omit `repo` / `tracker_kind`.
+   - **`tracker_kind` accepts three names; only two have a driver behind them.**
+     The store validates against `github | linear | jira`, but a stored `jira`
+     resolves to the fail-closed no-op driver — the project reads no tracker at all,
+     and there is no Jira import. Offer `jira` as a **label** if the operator wants
+     the project annotated, and say plainly that it wires nothing up. Two further
+     conditions apply to `linear`, and neither is visible from this skill:
+     `tracker_kind` is consulted at all only while the deployment's
+     `per_project_tracker_resolution` flag is **on** (with it off every project gets
+     the configured default driver, whatever the column says), and `linear` resolves
+     to the real driver only while `linear_tracker` is on. Both ship **off**, and
+     both are server-side environment settings — whoever runs the Marshall
+     deployment turns them on, which on hosted Marshall is not the operator you
+     are talking to. So record the intent here, name the two flags if they ask,
+     and do not report `tracker_kind: linear` as wired up on the strength of
+     setting it.
    - It returns the project whether it already existed in the workspace or was
      just created. Report which happened ("reused existing project" vs "created
      project") so the operator knows nothing was duplicated.
@@ -121,13 +138,19 @@ be born.
   mis-created empty record.
 
   One sharp edge worth knowing before you patch a project: changing `repo` to a
-  **different** value **clears every existing release milestone link** under it
-  (`milestone_number` and `tracker_url` are nulled), because `tracker_url` is
-  derived from the repo and would otherwise silently re-point at an unrelated
-  milestone. The response carries a `warning` naming the unlinked releases —
-  surface it and re-link each one explicitly with
+  **different** value **clears the GitHub milestone link on every release** under it
+  that holds one (`milestone_number` and `tracker_url` are nulled), because that
+  `tracker_url` is derived from the repo and would otherwise silently re-point at
+  an unrelated milestone. The response carries a `warning` naming the unlinked
+  releases — surface it and re-link each one explicitly with
   `release_update { milestone_number }`. Setting `repo` to the same value, or
   leaving it out, touches no links.
+
+  A release linked to any **other** tracker is untouched: the wipe is scoped to
+  links that really were repo-derived, and a Linear-sourced `tracker_url` came from
+  the driver at import with a null `milestone_number`. That matters because
+  `milestone_number` is the store's only re-link field, so a non-GitHub link cleared
+  by mistake could not be put back by hand.
 - **Probe before you create.** Always `release_get` first. If the release exists,
   resuming is the correct outcome; creating a duplicate is a bug.
 - **The store is the source of truth; the external link is optional.** Never

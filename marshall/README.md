@@ -57,7 +57,7 @@ unused.
 ## Connecting (no config to set)
 
 The plugin connects the hosted Marshall MCP server at
-`https://release-manager.swarmplatform.cloud/mcp` — the URL is built in, there's
+`https://releasemarshall.com/mcp` — the URL is built in, there's
 nothing to fill in when you enable it.
 
 Auth is **OAuth 2.1** (authorization-code + PKCE, Dynamic Client Registration):

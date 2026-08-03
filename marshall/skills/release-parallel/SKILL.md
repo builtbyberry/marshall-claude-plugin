@@ -13,10 +13,9 @@ note. That is what makes a fan-out **observable from the live screens and
 resumable** across sessions, machines, and agents — not state trapped in one
 orchestrator's context that dies when the session does.
 
-This is the **store-driven** counterpart to the GitHub-plan-driven
-`/release-parallel`: same shape (a worktree + a subagent per component), but the
-candidate set comes from the store (`release_next` / `release_get`) and the wave
-is recorded as a `dispatch_run` instead of being inferred from a plan file.
+It is **store-driven**: the candidate set comes from the store (`release_next` /
+`release_get`) and the wave is recorded as a `dispatch_run`, rather than being
+inferred from a local plan file. Nothing about the fan-out reads a tracker.
 Claude Code first — built to exploit Claude's parallel subagent dispatch.
 
 The layering, kept clean: the **claim is the lock/liveness** (one per component,
