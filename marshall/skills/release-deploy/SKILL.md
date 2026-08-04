@@ -1,6 +1,6 @@
 ---
 name: release-deploy
-description: "Drive the final cut-over of a release against the shared Marshall store — deploy mode (merge the release PR, watch the deploy, smoke-check production, monitor the window, via set_deploy_step) or tag mode (merge, date, tag, GitHub Release, Packagist, via set_ship_step) — recording every step on the store's record so it is resumable across sessions and machines. Use when the user says /release-deploy, deploy the release, ship <release>, tag the release, or cut over to prod."
+description: "Drive the final cut-over of a release against the shared Marshall store — deploy mode (merge the release PR, watch the deploy, smoke-check production, monitor the window, tag the merge commit, via set_deploy_step) or tag mode (merge, date, tag, GitHub Release, Packagist, via set_ship_step) — recording every step on the store's record so it is resumable across sessions and machines. Use when the user says /release-deploy, deploy the release, ship <release>, tag the release, or cut over to prod."
 ---
 
 # Release Deploy (Marshall)
@@ -20,7 +20,9 @@ re-shipping prod.
 - `mcp__plugin_marshall_marshall__set_deploy_step` — **deploy mode.** Start (`step: merging`)
   or advance one legal step: `deploying → smoke → monitor → done`. The store enforces
   one deploy per release, the forward-only order, and the readiness gate — you only
-  supply the next step plus the evidence each step below names.
+  supply the next step plus the evidence each step below names. It also accepts
+  `tag` / `release_url`, so a deployed release records the provenance tag it left
+  in the repo (Step 5).
 - `mcp__plugin_marshall_marshall__set_ship_step` — **tag mode.** The same progression for a
   release that ships as a tagged package rather than a deploy:
   `merging → dating → tagging → releasing → done`. Same one record, same readiness
@@ -46,7 +48,12 @@ drives, and the two are **mutually exclusive** — one record per release:
 
 Resolve the mode before anything else and say which one you are driving. Never
 mix the two tools on one release: a tag-mode release has no smoke/monitor step,
-and a deploy-mode release has no tag.
+and a deploy-mode release has no `dating`/`tagging`/`releasing` step.
+
+**Both modes still leave a tag behind.** The difference is what the tag *does*: in
+tag mode the tag **is** the ship (Packagist resolves it), so it gets its own step;
+in deploy mode the merge is the ship and the tag is provenance, recorded as
+evidence on `done` (Step 5). Neither mode ships without one.
 
 ## Config
 
@@ -154,13 +161,33 @@ evidence). Do not attempt a per-check store write — it returns `invalid_transi
    the `monitor` row in place (no self-transition), so **report it and stop** — do
    not advance to `done` (the deploy didn't pass). Surface **Smoke failure**; the
    record stays at `monitor`, unshipped.
-5. **On completion with all checks passing:** `set_deploy_step { release, step:
-   'done', verdict: 'shipped', monitor: { started_at, window_minutes, checks:
-   [<the full accumulated set>], completed_at: <now> } }` — the accumulated checks
-   are persisted here, in the single legal `monitor → done` write, and the release
-   derives `shipped`.
+5. **On completion with all checks passing:** tag first (Step 5), then close out
+   with `set_deploy_step { release, step: 'done', verdict: 'shipped', tag:
+   'v<version>', monitor: { started_at, window_minutes, checks: [<the full
+   accumulated set>], completed_at: <now> } }` — the accumulated checks and the
+   tag are persisted here, in the single legal `monitor → done` write, and the
+   release derives `shipped`.
 
-### Step 5 — Report
+### Step 5 — Tag the merge commit (before `done`)
+
+A deploy-mode release ships by merging, not by tagging — so nothing forces a tag
+to exist, and without one a version's provenance lives only in this store. Tag it,
+so the repo can answer "what was v0.21.0" on its own.
+
+1. On the **default branch**, tag the deploy's own `merge_sha` — not `HEAD`, which
+   has usually moved on:
+   `git tag -a v<version> <merge_sha> -m '<version> — <theme>' && git push origin v<version>`
+2. Record it on the `done` call above. **It has to be that call**: `done` is
+   terminal, so there is no later advance to carry the evidence.
+3. **Only on a shipped verdict.** A `rollback-needed` release gets no tag — a tag
+   claiming a version that was rolled back is worse than no tag. Tag the patch
+   release that fixes it instead.
+4. If the push fails (protected ref, wrong remote), **still record `done`** with
+   the verdict, and leave `tag` unset rather than reporting one that does not
+   exist — the store never verifies it. Push the tag afterwards; it is a repo fact
+   the store simply does not carry for that release.
+
+### Step 6 — Report
 
 When `deploy.step == done`: summarize merge time, deploy duration, smoke result,
 monitor checks, the production + dashboard URLs, and the operator follow-ups
@@ -259,7 +286,10 @@ Same rule as deploy mode: `release_get { release }`, read the ship record's
 - **Do not auto-merge, auto-rollback, or auto-retry a smoke check.** Those are
   human decisions; the skill prepares, records, and surfaces.
 - **A failed smoke stays at `smoke`/`monitor`, not `done`.** Don't fake a shipped
-  verdict on a deploy that didn't ship.
+  verdict on a deploy that didn't ship — and don't tag it either.
+- **Tag the `merge_sha`, not `HEAD`.** By the time the monitor window closes the
+  default branch has usually moved past the release, and a tag on the wrong commit
+  is worse than none: it answers "what was this version" incorrectly, forever.
 - **Surface store errors verbatim** — `deploy_blocked` (resolve high findings
   first), `invalid_transition` (re-read the step), `lease_lost` — never work
   around them.

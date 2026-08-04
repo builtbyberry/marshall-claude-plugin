@@ -143,14 +143,14 @@ store is the only place they can be born.
   `tracker_url` is derived from the repo and would otherwise silently re-point at
   an unrelated milestone. The response carries a `warning` naming the unlinked
   releases — surface it and re-link each one explicitly with
-  `release_update { milestone_number }`. Setting `repo` to the same value, or
-  leaving it out, touches no links.
+  `release_update { milestone_number }` (or `{ collection }`). Setting `repo` to the
+  same value, or leaving it out, touches no links.
 
   A release linked to any **other** tracker is untouched: the wipe is scoped to
   links that really were repo-derived, and a Linear-sourced `tracker_url` came from
-  the driver at import with a null `milestone_number`. That matters because
-  `milestone_number` is the store's only re-link field, so a non-GitHub link cleared
-  by mistake could not be put back by hand.
+  the driver with a null `milestone_number`. Keeping that scope tight still matters
+  even though `release_update { collection }` can now re-link any tracker: a link
+  that survives beats one the operator has to notice was destroyed and rebuild.
 - **Probe before you create.** Always `release_get` first. If the release exists,
   resuming is the correct outcome; creating a duplicate is a bug.
 - **The store is the source of truth; the external link is optional.** Never

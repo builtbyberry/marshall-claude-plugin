@@ -21,18 +21,23 @@ release is seeded.
   makes the phase resolve). If it's missing, seed it first — `/marshall:release-init`
   (native `release_create`) or a tracker import — then retry.
 - `mcp__plugin_marshall_marshall__release_update` — **OPTIONAL, opt-in only**: when the operator says
-  yes (step 9), link the release to a **GitHub milestone** by passing
-  `milestone_number`; `tracker_url` is derived from the project repo. Never
-  called without an explicit yes.
+  yes (step 9), link the release to a collection in its tracker. Never called
+  without an explicit yes.
 
-  **This one field is still GitHub-shaped, and that is a real limit, not loose
-  wording.** `milestone_number` is an integer and `tracker_url` is derived as
-  `https://github.com/<repo>/milestone/<n>`, so it can only describe a GitHub
-  milestone. There is no post-hoc link for any other tracker: a Linear-tracked
-  release gets its `tracker_url` from the **driver at import time** (a Linear
-  Project carries its own URL; a Cycle has none, so a cycle-sourced release stays
-  unlinked). On a non-GitHub project, step 9 does not apply — skip it rather than
-  reaching for `milestone_number`.
+  **Two spellings of one link, and passing both fails.** `collection` is the
+  general one: the id of a collection on whatever tracker the project resolves to
+  — a milestone on GitHub, a Project or a Cycle on Linear — as an opaque
+  **string**. The store reads the URL from the tracker itself, so there is no way
+  to hand-write one, and no need to. `milestone_number` is the GitHub-shaped
+  legacy field, unchanged: an integer, with `tracker_url` derived as
+  `https://github.com/<repo>/milestone/<n>`. Either accepts `null` to unlink.
+
+  Two answers are not failures and must be reported as-is rather than retried:
+  a collection whose **kind has no page of its own** (a Linear Cycle) returns a
+  `warning` and leaves the release unlinked — that is honest, and nothing is
+  invented to fill it — while `tracker_unavailable` means **nothing was written
+  at all**, so the other fields in that same call are untouched and the fix is to
+  try again.
 
 If the MCP server isn't connected, **stop and say so** — the store is the only
 source of truth for whether the release exists; don't proceed from memory.
@@ -111,33 +116,43 @@ current checkout): `repo`, `default_branch`,
    the release's `tracker_url`; a natively-created release has none until one is
    linked.
 
-   **Ask only on a GitHub-tracked project** — one whose `tracker_kind` is `github`
-   (or is unset on a deployment that still resolves to the configured default) *and*
-   which has a `repo` — **and** only when `release_get` shows no `tracker_url` yet.
+   **Ask on any tracked project** — one with a `tracker_kind` (or unset on a
+   deployment that still resolves to the configured default) — **and** only when
+   `release_get` shows no `tracker_url` yet. On GitHub the project also needs a
+   `repo`, since a milestone lives in one.
 
    You are reading the raw column here, which is the one thing server-side callers
    are told not to do: while `per_project_tracker_resolution` is off, a project
-   whose column reads `linear` still resolves to GitHub. The store exposes the
-   column and no resolved-provider field, so it is all you have — and it errs the
-   safe way. Reading `linear` and skipping costs nothing but an unlinked release;
-   the reverse would write a GitHub milestone number onto a project that is not
-   GitHub-backed.
-   On any other tracker there is nothing to ask: `milestone_number` is the store's
-   only post-hoc link and it cannot describe a non-GitHub collection, so say the
-   release is unlinked and move on. Do not offer to hand-write a URL.
+   whose column reads `linear` still resolves to GitHub. **Guessing wrong is now
+   loud rather than silent** — the store resolves the driver itself and an id that
+   tracker does not hold comes back as `collection_missing`, naming the mistake
+   instead of writing a GitHub milestone number onto a project that is not
+   GitHub-backed. So read the column to decide *what to ask for*, and let the
+   store settle *which tracker it is*.
 
-   When it does apply, **ask** the operator: "Link this release to a GitHub
-   milestone? (create a new one / use an existing number / skip)". Default to
-   **skip** — never create or link a milestone without an explicit yes.
-   - **Create new** → `gh api repos/<repo>/milestones -f title="<release-label>"`,
-     capture its `number`, then `mcp__plugin_marshall_marshall__release_update { release,
-     milestone_number: <number> }` (this derives `tracker_url` from the repo).
+   When it applies, **ask** the operator: "Link this release to its collection in
+   <tracker>? (create a new one / use an existing one / skip)". Default to
+   **skip** — never create or link without an explicit yes.
+   - **Create new (GitHub only)** → `gh api repos/<repo>/milestones -f
+     title="<release-label>"`, capture its `number`, then
+     `mcp__plugin_marshall_marshall__release_update { release, milestone_number: <number> }`.
      Note: the milestone starts **empty** — native components are store-only, not
      GitHub issues — so it's a tracker home for the release, not an issue list.
-   - **Existing number** → `mcp__plugin_marshall_marshall__release_update { release, milestone_number:
-     <number> }` only; do not create a milestone.
+     There is no create-a-collection path for other trackers; make it in the
+     tracker's own UI first.
+   - **Existing** → `mcp__plugin_marshall_marshall__release_update { release, collection:
+     "<id>" }`. The id is opaque and the store matches it two ways, so ask for
+     whichever the operator actually has: **the collection's id**, or **the URL of
+     the collection's page** (paste the Linear Project URL straight from the
+     browser). Only an address the tracker itself reports will match — a made-up
+     one fails with `collection_missing` rather than being stored. On GitHub,
+     `milestone_number: <number>` remains the equivalent call; do not pass both.
    - **Skip** → leave it unlinked; the UI simply omits the link. It can be linked
      later with the same `release_update` call.
+
+   If the answer comes back with a `warning` that the collection has **no page of
+   its own** (a Linear Cycle), that is the honest outcome, not a retry: report the
+   release as unlinked and move on. Never offer to hand-write a URL to fill it.
    If the release is **already linked** (`tracker_url` present), don't ask —
    report it as-is.
 10. **Report.** Print the new branch name, the PR URL, whether a tracker link was
