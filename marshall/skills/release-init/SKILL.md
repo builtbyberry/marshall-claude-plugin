@@ -1,21 +1,40 @@
 ---
 name: release-init
-description: "Bootstrap a project and release directly in the shared Marshall store — born-in-the-store, no tracker round-trip. Resolve-or-create the workspace project, create the release (theme, version-or-slug, out_of_scope), and offer an optional external-tracker link. Use when the user says /release-init, bootstrap a release in the store, create a project and release in Marshall, start a release from scratch, or init a release without a GitHub milestone."
+description: "Bootstrap a project and release directly in the shared Marshall store — born-in-the-store, no import. Resolve-or-create the workspace project, create the release (theme, version-or-slug, out_of_scope), and offer an optional external-tracker link; on a project whose tracker resolves, release_create also creates the release's collection there and links it. Use when the user says /release-init, bootstrap a release in the store, create a project and release in Marshall, start a release from scratch, or init a release without a GitHub milestone."
 ---
 
 # Release Init (Marshall)
 
 Bootstrap a release the Marshall-native way: **create the project and release
-directly in the shared store** through its write-path tools, with zero tracker
-round-trip. The operator names a theme and a version-or-slug and walks away with
-a live release in Marshall.
+directly in the shared store** through its write-path tools. The operator names a
+theme and a version-or-slug and walks away with a live release in Marshall.
 
 It is the **born-in-the-store** path: it calls `project_create` / `release_create`
-directly, so the release exists in Marshall the moment you finish — no tracker
-collection, no import. The alternative is to let the release enter Marshall from a
-tracker instead (a GitHub milestone, a Linear Project or Cycle) via the import seam
-below. Marshall *augments* external trackers, it doesn't replace them, so an
-external link is **offered but optional** — the store is the source of truth.
+directly, so the release exists in Marshall the moment you finish — no import. The
+alternative is to let the release enter Marshall from a tracker instead (a GitHub
+milestone, a Linear Project or Cycle) via the import seam below. Marshall *augments*
+external trackers, it doesn't replace them, and the store remains the source of truth.
+
+**Born in the store no longer means invisible to the tracker** (v0.24.0). On a
+project whose tracker RESOLVES, `release_create` also creates the release's
+collection there — a Linear Project, a GitHub milestone — and stores the link. You
+make no tracker call and answer no extra question; it is a server-side effect of the
+same `release_create` you were already making. On an untracked project nothing
+changes and there is no tracker round-trip at all.
+
+Two things to tell the operator when it applies:
+
+- **The release comes back already linked**, so the step-9 "link this to a
+  collection?" question in `/marshall:release-open` will not apply to it.
+- **A tracker failure does not fail the init.** The release is created with a null
+  link and the store logs it. Say so plainly rather than retrying — re-running
+  `release_create` is refused on the slug, and creating a second collection by hand
+  is the one thing repair exists to avoid.
+
+**Linear needs one thing set first.** Its API requires a team on every create, and
+Marshall will not choose one — so a Linear-tracked project needs `tracker_team` set
+to the team's **UUID** (not the key its UI shows, e.g. not `BUI`) or the collection
+create is refused with a named error. See operator-runbook §5.8.
 
 It is **create-only and additive**: it never edits or deletes, and re-running
 against a release that already exists **resumes** rather than duplicating.
@@ -87,8 +106,14 @@ store is the only place they can be born.
      `owner/name` on GitHub; a tracker with no container concept, such as Linear,
      doesn't need one) plus `tracker_kind`. Ask whether to link one; make clear it
      is **skippable** and that the store is the source of truth — `project_create`
-     stores the link, it makes no tracker API call and sets up no bidirectional
-     sync. If the operator skips, omit `repo` / `tracker_kind`.
+     itself stores the link and makes no tracker API call, and there is no
+     bidirectional sync at any point. If the operator skips, omit `repo` /
+     `tracker_kind`.
+   - **Answering `tracker_kind` here decides what the NEXT step does**, so it is no
+     longer only a label. Once the project's tracker resolves, the `release_create`
+     in step 6 will create the release's collection on it, and every later
+     `component_create` will file an issue. That is the point of setting it — but say
+     so while asking, rather than letting the operator discover it from the response.
    - **`tracker_kind` accepts three names; only two have a driver behind them.**
      The store validates against `github | linear | jira`, but a stored `jira`
      resolves to the fail-closed no-op driver — the project reads no tracker at all,
@@ -121,6 +146,18 @@ store is the only place they can be born.
    "<out_of_scope>" }`.
    `slug` is derived from `version` when omitted; `source` defaults to
    `native`. On success, report the created release.
+
+   **On a tracked project this call also creates the collection.** Read
+   `tracker_url` back off the response and report which happened, because the two
+   outcomes need different things said:
+   - **Linked** → name the collection in your report; step 9 of
+     `/marshall:release-open` will have nothing left to ask.
+   - **Unlinked on a project you expected to be tracked** → the tracker refused and
+     the store logged it. Say so, and say the release is fine — it exists, it is
+     planned against, and the link is repaired deliberately (operator-runbook §5.9).
+     **Do not re-run `release_create`**: it is refused on the slug, and creating a
+     collection by hand is what leaves a release with two of them.
+   - The likeliest cause on Linear is a missing or key-shaped `tracker_team`.
 7. **Report.** Print the project (reused or created), the release version-or-slug
    and theme, whether an external link was attached, and the next step:
    `Run /marshall:release-plan to add components, then /marshall:release-graph to verify the

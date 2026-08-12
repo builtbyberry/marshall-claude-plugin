@@ -1,6 +1,6 @@
 ---
 name: release-admin
-description: "Archive, restore, or permanently delete a Marshall project, release, or component — the lifecycle verbs you reach for when a record was mis-created, abandoned, or has simply gone quiet. Use when the user says /marshall:release-admin, archive <release>, hide this project, restore the archived component, un-archive, delete this empty release, or clean up the release list."
+description: "Archive, restore, permanently delete, or repair a missing tracker link on a Marshall project, release, or component — the corrective verbs you reach for when a record was mis-created, abandoned, has gone quiet, or never made it onto its tracker. Use when the user says /marshall:release-admin, archive <release>, hide this project, restore the archived component, un-archive, delete this empty release, clean up the release list, or the release came back unlinked / repair the tracker link."
 ---
 
 # Release Admin (Marshall)
@@ -64,6 +64,10 @@ Hard delete (**irreversible** — read the section below before calling any of t
 - `mcp__plugin_marshall_marshall__hard_delete_release { release, project? }`
 - `mcp__plugin_marshall_marshall__hard_delete_project { project }`
 
+Repair a tracker link that was never written (**owner-only**, safe to re-run):
+
+- `mcp__plugin_marshall_marshall__repair_tracker_link { release, project? }`
+
 If the MCP server isn't connected, **stop and say so.** These records live only in
 the store; there is no local file to edit instead.
 
@@ -103,6 +107,43 @@ the components that still matter).
 5. **Report what actually changed**, including which views it left or re-entered
    ("hidden from `release_next`; a direct `release_get` still returns it"), and for
    an archive, the exact call that undoes it.
+
+## Repairing a tracker link
+
+The third corrective verb, and the only one that reaches outside the store. On a
+project whose tracker resolves, `release_create` also creates the release's
+collection there and each `component_create` files an issue — and **a tracker
+failure never blocks planning**, so the record lands with its link null and the
+store logs it. This is the way back from that, and it is the reason the promise is
+a contract rather than a shrug.
+
+**Reach for it when** a release you expected to be tracked came back unlinked, or a
+component's issue was never filed. Do **not** re-run `release_create` or
+`component_create` to "try again" — the store refuses the duplicate slug, and on
+Linear a second attempt makes a second record rather than refusing.
+
+`mcp__plugin_marshall_marshall__repair_tracker_link { release: "<version>", project?: "<slug>" }`
+
+**It resolves, creates, or refuses — and never guesses.** It records an id the store
+can already prove, files what is provably missing, and refuses anything it would
+have to decide. In particular it will **not** adopt a collection or issue because
+the name matches: `collection_exists_unlinked` names the candidate and stops. That
+is not timidity — Linear's collections read reaches teams the grant is not a member
+of, so a name match is not evidence of ownership. Adopt deliberately instead, with
+`release_update { collection: <id-or-url> }` or `component_update { external_ref }`.
+
+**Owner-only**, refused with `not_authorized` otherwise, on the same reasoning as
+hard delete: it spends the workspace's tracker credential and can create records in
+it.
+
+**Re-run it when the response carries `remaining`.** Repair commits each link as it
+lands and stops at its own deadline, so a release with many unlinked components
+needs more than one pass. Running it again creates nothing twice, and a release with
+nothing left to repair makes no tracker calls at all. Report `created` separately
+from anything resolved — the operator's first question is always whether something
+new appeared in their tracker.
+
+The full refusal table and the diagnostic steps are operator-runbook §5.9.
 
 ## Hard delete: what the server refuses, and why you should not re-check it
 
