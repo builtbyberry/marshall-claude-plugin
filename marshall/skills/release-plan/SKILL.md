@@ -1,6 +1,6 @@
 ---
 name: release-plan
-description: "Plan a release straight into the shared Marshall store: run the structured planning conversation (theme → component sweep → deploy-safety → out-of-scope) and write each confirmed component via component_create — no GitHub issues, no release-plan.json. Use when the user says /marshall:release-plan, plan v<X.Y.Z>, plan the next release, scope <release>, or add a component to <release>."
+description: "Plan a release straight into the shared Marshall store: run the structured planning conversation (theme → component sweep → deploy-safety → out-of-scope) and write each confirmed component via component_create — no release-plan.json, and no tracker call of your own (on a tracked project the store files the issue and stamps external_ref itself). Use when the user says /marshall:release-plan, plan v<X.Y.Z>, plan the next release, scope <release>, or add a component to <release>."
 ---
 
 # Release Plan (Marshall)
@@ -8,10 +8,32 @@ description: "Plan a release straight into the shared Marshall store: run the st
 Turn a release theme into a fully-scoped set of components **in the shared Marshall
 store**. This is the marquee planning skill: it runs the structured planning
 conversation and writes each confirmed component **straight to the store** via
-`component_create`. It is **pure-store** — it files **no** tracker issues and
-writes **no** `release-plan.json`. The store is the single source of truth, so
-the moment a component is confirmed it is live on the release-detail screen and
-graphable by `/marshall:release-graph`.
+`component_create`. It writes **no** `release-plan.json` and makes **no** tracker
+call of its own. The store is the single source of truth, so the moment a
+component is confirmed it is live on the release-detail screen and graphable by
+`/marshall:release-graph`.
+
+**On a TRACKED project the store then files the tracker's own records for you**
+(v0.24.0). `release_create` creates the collection — a Linear Project, a GitHub
+milestone — and each `component_create` files one issue into it and stores the
+back-link in `external_ref`. That is a **server-side** effect of the same two calls
+this skill already makes: you still call one tool per component and you still never
+touch a tracker API yourself. What changed is what the store does with the call, not
+what you do.
+
+Two consequences worth holding onto:
+
+- **`external_ref` gets populated without you asking for it**, which is what makes
+  auto-close reachable — Marshall closes a linked issue when the component reaches
+  `merged`, and on a natively planned release there was previously nothing to close.
+- **A tracker failure never blocks planning.** The component lands with a null link
+  and the store logs it loudly. Report that to the operator if the response comes
+  back unlinked on a project you expected to be tracked, and point them at repair —
+  do **not** re-run `component_create` to "try again", which would either duplicate
+  the component or be refused on its slug.
+
+On an **untracked** project nothing about this skill changes: no tracker call, no
+prompt, no new failure path.
 
 It is the planning path for releases that live in Marshall end-to-end. The
 alternative is not another planning skill — it is to let the components arrive from
@@ -38,7 +60,8 @@ it.
 
 If the MCP server isn't connected, **stop and say so** — the store is the only
 place the plan can land; do not fall back to filing tracker issues or writing a
-local file. That would defeat the pure-store path.
+local file. The store is the only place a plan can land — and on a tracked project
+it is also the only thing that should be talking to the tracker.
 
 **This skill never creates the release, only its components.** If the release isn't
 seeded yet, the fix is `/marshall:release-init` (`release_create`), or importing the
@@ -166,11 +189,18 @@ exactly like an imported one, whose `notes` come from the issue description.
 Always include a `CHANGELOG entry under <release>` and a `Docs updated:` bullet in
 the acceptance criteria, matching house convention.
 
-### Optional external-tracker link
+### Linking to an existing tracker issue
 
-After drafting, offer an **optional** external-tracker link and make it clearly
-skippable: "Link this to a tracker issue? (GitHub / Jira / Linear, or skip)".
-If they want one, capture `external_ref`:
+**On a tracked project, do not offer this.** The store files the issue and stamps
+`external_ref` itself, so asking the operator to supply one either duplicates the
+issue the store is about to create or overrides it with a ref pointing somewhere
+else. Pass `external_ref` on a tracked project **only** when the operator is
+deliberately adopting an issue that already exists — and say plainly that doing so
+means the store will not create one.
+
+Otherwise this is the fallback for an **untracked** project, and for adopting an
+existing issue: offer it as clearly optional — "Link this to a tracker issue?
+(GitHub / Jira / Linear, or skip)". If they want one, capture `external_ref`:
 
 - `provider` — `github` | `jira` | `linear` (or any tracker name)
 - `id` — the issue key/number (e.g. `52`, `PROJ-123`)
@@ -185,8 +215,11 @@ write back. Only `github` and `linear` have a driver that can close at all.
 
 Beyond that one path this is a stored link only — Marshall augments the tracker, it
 does not sync with it.
-Skip it by default; most store-native components won't have one. Omit
-`external_ref` entirely when skipped.
+
+Skip it by default. On an untracked project most store-native components genuinely
+have no link; on a tracked one the store supplies it. Omit `external_ref` entirely
+when skipped — an empty or guessed ref is worse than none, because it stops the
+store creating the real one.
 
 ## Confirmation loop
 
@@ -289,11 +322,17 @@ When the loop finishes, print:
 
 ## Guardrails
 
-- **Pure-store, always.** Never file a tracker issue and never write
-  `release-plan.json` (or any local state) from this skill. The store is
-  authoritative. A team that wants its issues in a tracker files them there and
-  **imports** the collection — that is the separate path, and it is an import, not
-  another planning skill. Don't blend the two in one sitting.
+- **Write only through the store.** Never call a tracker API yourself and never
+  write `release-plan.json` (or any local state) from this skill. The store is
+  authoritative, and on a tracked project it is also what files the tracker's
+  records — so reaching for `gh` or a Linear call here does not add anything, it
+  creates a second issue the store does not know about. A team whose work ALREADY
+  lives in a tracker still **imports** the collection; that remains a separate path
+  and it is an import, not another planning skill. Don't blend the two in one sitting.
+- **Never re-run a create to retry a tracker failure.** A component that landed with
+  a null link is created; the store refuses a duplicate slug, and creation is not
+  idempotent on the tracker side either — on Linear a second attempt makes a second
+  record rather than refusing. Repair the link deliberately instead.
 - **Never create the release here.** If `release_get` is empty, the fix is
   `/marshall:release-init`, or an import (`srm:import-release` for GitHub, the web
   picker for a tracker with a driver behind it) — not a write from this skill.
