@@ -12,6 +12,7 @@
     "marshall/skills/_shared/references/review-protocol.md",
     "marshall/skills/change-review/SKILL.md",
     "marshall/skills/release-admin/SKILL.md",
+    "marshall/skills/release-build/SKILL.md",
     "marshall/skills/release-deploy/SKILL.md",
     "marshall/skills/release-graph/SKILL.md",
     "marshall/skills/release-init/SKILL.md",
