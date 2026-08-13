@@ -19,7 +19,7 @@ marshall/
   commands/release-status.md   /release-status — who holds what + drift
   hooks/hooks.json             SessionStart: optional CLI readiness ping
   scripts/session-start.sh     the hook body (silent without the CLI)
-  skills/                      the thirteen release skills:
+  skills/                      the fourteen release skills:
     release-init               bootstrap a project + release in the store
     release-plan               scope a release into components
     release-graph              declare the dependency graph (makes work startable)
@@ -29,6 +29,7 @@ marshall/
     release-parallel           dispatch a wave across startable components
     release-unclaim            hand a claim back, or force-revoke a stuck one
     change-review              multi-lens review of a component's diff
+    release-build              carry one component from claim to merged (the loop)
     release-readiness          multi-lens review of the release
     release-wrap               review + CHANGELOG + hand off for deploy
     release-deploy             merge → watch → smoke → monitor
