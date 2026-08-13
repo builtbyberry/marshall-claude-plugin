@@ -136,9 +136,17 @@ of, so a name match is not evidence of ownership. Adopt deliberately instead, wi
 hard delete: it spends the workspace's tracker credential and can create records in
 it.
 
-**Re-run it when the response carries `remaining`.** Repair commits each link as it
-lands and stops at its own deadline, so a release with many unlinked components
-needs more than one pass. Running it again creates nothing twice, and a release with
+**Re-run it when the response says `resumable: true` — not merely when it carries
+`remaining`.** Repair commits each link as it lands and stops at its own deadline, so a
+release with many unlinked components needs more than one pass. But `remaining` is the
+INVENTORY of what is still unlinked, and some of it never becomes linkable: a component
+that has already merged is skipped as `component_already_merged`, because auto-close
+fires on the transition INTO merged and that is behind it, so an issue filed now would
+stay open forever. **Tell the operator the way out rather than stopping there** — reopen
+the component if the merge was premature, or file the issue by hand and link it with
+`component_update { external_ref }`. Retrying on `remaining` is a loop with no exit;
+`resumable` is the retry signal, and when it is false read the reason on each skip and
+say what it asks for. Running it again creates nothing twice, and a release with
 nothing left to repair makes no tracker calls at all. Report `created` separately
 from anything resolved — the operator's first question is always whether something
 new appeared in their tracker.
