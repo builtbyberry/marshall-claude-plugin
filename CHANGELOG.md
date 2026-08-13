@@ -8,6 +8,20 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
+## 1.8.0 — 2026-08-13
+
+Repair's retry signal, said in the skill.
+
+### Changed
+
+- **`release-admin` says to re-run repair on `resumable: true`, not `remaining`.**
+  `remaining` is the inventory of what is still unlinked, and some of it never becomes
+  linkable — a component already merged is skipped, because auto-close fires on the
+  transition *into* merged and that is behind it, so an issue filed now would stay open
+  forever. Retrying on `remaining` is a loop with no exit. The skill now points at
+  `resumable` as the retry signal and, when it is false, at the way out per skip: reopen a
+  premature merge, or link the issue by hand with `component_update { external_ref }`.
+
 ## 1.4.0 — 2026-08-03
 
 The tracker stops being GitHub.
