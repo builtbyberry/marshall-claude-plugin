@@ -1,6 +1,6 @@
 ---
 name: release-build
-description: "Carry one release component from unclaimed to merged in a single guided loop against the shared Marshall store: claim → plan → pressure-test the plan → build → prove the tests can fail → change-review → fix → independently verify the fixes → land. Composes /marshall:release-topic (the claim lifecycle) and /marshall:change-review (the lens mechanics); owns only the sequencing, the two reviews that have no home today, and the landing. Use when the user says /marshall:release-build, build <component>, run the component loop, take this component to merged, or hands you a claimed component to carry through."
+description: "Carry one release component from unclaimed to merged in a single guided loop against the shared Marshall store: claim → plan → pressure-test the plan → build → prove the tests can fail → change-review → fix → independently verify the fixes → land. Composes /marshall:release-topic (the claim lifecycle) and /marshall:change-review (the lens mechanics); owns only the sequencing, the two reviews that have no home today, and the landing. Use when the user says /marshall:release-build, build <component>, run the component loop, take this component to merged, or hands you a claimed component to carry through — including entering mid-stream (resume, or land-only) to finish an already-built, already-reviewed component."
 ---
 
 # Release Build (Marshall)
@@ -37,8 +37,11 @@ Changing what either of those skills does is **out of scope** (see Guardrails).
   `notes` (the plan of record: GOAL, acceptance criteria, out-of-scope, `touches`),
   its work-state, and the existing `kind: change` findings. **The store, plus git,
   is where the resume point comes from — never conversation memory.**
-- `mcp__plugin_marshall_marshall__heartbeat_claim` — keep the lease alive across the
-  long middle (build, review). A `lease_lost` is a stop — recover through
+- `mcp__plugin_marshall_marshall__heartbeat_claim` — keep the explicit claim's lease
+  alive on a structural cadence: beat it **at each step boundary**, and again
+  **immediately before a long-running operation** (Step 4 build, Step 6's full test /
+  PHPStan run, Step 7's change-review fan-out) — a cadence tied to the work, not a
+  timer to remember. A `lease_lost` is a stop — recover through
   `/marshall:release-topic` and re-claim before continuing.
 - `mcp__plugin_marshall_marshall__set_component_state` — move the work-state:
   `in_progress` (Step 1) → `proposed` (PR open, Step 9) → `merged` (landed, Step 9).
@@ -72,20 +75,48 @@ Within the build loop it **hard-stops on exactly three things**:
 These three are the *build-loop* stops. The precondition and lease failures —
 `claim_conflict` / `not_startable` at Step 1, `lease_lost` mid-run — and Step 0's
 "two signals disagree" stop belong to the **claim lifecycle**, not the loop; they are
-`/marshall:release-topic`'s stops, and they are not counted among these three.
+`/marshall:release-topic`'s stops, and they are not counted among these three. A
+further stop — being **blocked by a pre-existing failure outside your `touches`** — is
+release-build's own but is likewise not one of the three; it has its own verb (below).
 
 **A hard stop leaves the claim held.** Resuming costs nothing: the lease is yours,
 the branch is yours, and Step 0 re-derives exactly where you were. A hard stop is a
 pause, not an abandonment.
+
+### The out-of-scope blocker — a stop with a verb
+
+One failure is neither one of the three above nor a claim-lifecycle stop: your
+component is **blocked by a pre-existing failure outside your `touches`** — code you
+did not write and cannot fix inside your acceptance criteria (a sibling component's
+PHPStan debt reddening shared CI, a broken test in a file you never opened). This is
+**not hard-stop #2**: you did not cause this red, so "one honest fix attempt" does not
+apply — the fix is not yours to make. Nor is it the ordinary *noticed* out-of-scope
+problem, the one you record against the release and keep going (Steps 4, 6): a blocker
+you merely record **stays red**, because **recording a finding against the release does
+not unblock red CI — a finding is a note, not a verb.**
+
+The default is **hard-stop-and-surface** — to the human when a human is driving —
+leaving the claim held so resuming is free. Do **not** reach into the other component's
+code to make CI green: that smuggles an unclaimed, unreviewed change into this
+component's diff, and — the multi-actor hazard — **someone may hold that other
+component** right now; silently fixing it and merging past them is exactly
+**what claims exist to prevent**.
+
+If fixing the blocker is genuinely sanctioned, it is a **sanctioned sibling** — a
+**separate claimed + branched + change-reviewed** unit, recorded on the release and
+landed on its own merits, **not merged past the blocked code's owner** and never riding
+in on this component's diff. Whether to open that sibling at all is a scoping call, not
+a build one: if it is unclear, that is scope ambiguity (hard-stop #3) — surface it,
+never guess.
 
 ### The merge dial
 
 Landing (Step 9) is the one step with a mode, because whether a clean run *merges*
 or *parks* is the operator's call, not the skill's:
 
-- **autonomous** — auto-merge when clean (the three hard stops are the only brakes).
-  This is how a dispatched/unattended run lands, and what `/marshall:release-parallel`
-  expects.
+- **autonomous** — auto-merge when clean (the three hard stops — and the out-of-scope
+  blocker above — are the only brakes). This is how a dispatched/unattended run lands,
+  and what `/marshall:release-parallel` expects.
 - **supervised** — land the PR to `proposed` and stop; a human merges. This is the
   default when a human is driving interactively.
 
@@ -93,6 +124,12 @@ The **gates are identical and mandatory in both** — the dial governs only the 
 merge, never whether the plan was pressure-tested or the tests were proven. Resolve
 the mode at Step 0 (dispatched → autonomous; interactive → supervised) and say which
 one you are driving.
+
+An explicit operator instruction **overrides this default** — `merge it` selects
+autonomous even in an interactive session, `park it` selects supervised even in a
+dispatched one. The entry mode does **not** add a second merge axis: `land-only`
+(below) inherits this same dispatched → autonomous / interactive → supervised
+default, with the same override.
 
 ## The two steps that must not be optimised away
 
@@ -107,6 +144,35 @@ They are **non-skippable** — a run that skips either is not a release-build ru
   the findings**. An independent pass once found a change that walked operators into
   the exact data loss the release existed to prevent — *after* both review lenses had
   already cleared it. The finder is the wrong judge of the fix.
+
+## Entering to finish — resume and land-only
+
+The loop runs top-to-bottom by default (a **full** run). Two other entries are
+first-class, and both run the **gate attestation** at Step 0 rather than assuming
+the skipped steps happened:
+
+- **resume** — re-enter your OWN paused run. Step 0's ladder derives where you
+  were; because the plan and the two gates leave no store footprint, a resume
+  point past Step 3 is **attested out loud**, not silently continued.
+- **land-only** — enter to finish a component that was **already built and
+  change-reviewed by another owner or session** — the last mile. Run Steps 6 → 9
+  (gates → change-review reconciliation → independent verify → land), opening with
+  an explicit acknowledgement that **Steps 2–5 were another owner's
+  responsibility**, and running the gate attestation to account for Step 3 before
+  proceeding. **Land-only drops nothing that guards quality:** Step 8's independent
+  verify and the three hard stops stay in force, and Step 5 (prove-can-fail) is
+  satisfied vacuously **only if this entry adds no new guard** — if it adds one,
+  prove it. Land-only exists so the last mile is not carried by pretending to
+  re-run gates that already ran; it is **not** a fast-path around them.
+
+**Worked example — land-only, mid-stream.** Another session built and
+change-reviewed a component and stopped; you enter to land it. Step 0 derives a
+resume point past Step 3 and says so out loud: *commits and `kind: change`
+findings exist, but Step 3 (the plan pressure-test) leaves no footprint and cannot
+be confirmed from state, so it will not be assumed to have run.* If you know it was
+pressure-tested upstream, you attest that and the loop records it and proceeds; if
+you do not, it runs a **plan-vs-implementation review** before touching Step 8.
+Either way the skip is surfaced, never buried.
 
 ## Procedure
 
@@ -129,12 +195,24 @@ whole loop is **resumable from the store + git** (see Step 0) — never from mem
   - **commits exist, no `kind: change` findings** → built but unreviewed; re-run
     **Step 5** (prove-can-fail) before Step 7.
   - **findings exist** → reconcile against them in Steps 7–8.
-- Resolve the **merge dial** (dispatched → autonomous; interactive → supervised).
+- **Attest the upstream gates — out loud.** The plan (Step 2) and the two gates
+  (Steps 3, 8) leave no store footprint, so at any resume point past them the loop
+  cannot tell from state whether they ran. **Do not assume they did.** When the
+  derived point is at or past Step 4 (commits exist), name the non-skippable gates
+  that cannot be confirmed and account for each before continuing — for Step 3: if
+  no code exists yet, run it; if code already exists a pre-code pressure-test is
+  impossible, so run its closest equivalent, a **plan-vs-implementation review**,
+  or — on the operator's attestation that it ran upstream — record it attested, or
+  declare it **void with the reason stated**. A gate you cannot confirm and do not
+  account for is a silent skip, the one thing this loop must never do.
+- Resolve the **merge dial** (dispatched → autonomous; interactive → supervised) —
+  an explicit operator instruction overrides it.
 
 ### Step 1 — Claim + branch  *(composes `/marshall:release-topic`)*
 Confirm startable, `claim_component`, handle `claim_conflict` / `not_startable` as
 hard stops, `set_component_state in_progress`, cut the topic branch. Delegated
-wholesale — no claim logic is restated here. Heartbeat through the long steps below.
+wholesale — no claim logic is restated here. Beat the claim at each step boundary
+through the loop below (see the `heartbeat_claim` note above).
 
 ### Step 2 — Plan the component
 Write an implementation plan **before any edit to source**: the files to touch
@@ -156,8 +234,9 @@ survives is the failure this step exists to prevent.
 ### Step 4 — Build
 Implement to the surviving plan and the acceptance criteria — **no more.** Do not
 invent acceptance criteria; an out-of-scope problem you notice is recorded against
-the release (Step 6), not folded in. `heartbeat_claim` periodically; `lease_lost` is
-a stop → recover via `/marshall:release-topic` and re-claim.
+the release (Step 6), not folded in. Beat the claim on entering this step, and again
+immediately before a long-running operation (the full test / PHPStan run in Step 6);
+a `lease_lost` is a stop → recover via `/marshall:release-topic` and re-claim.
 
 ### Step 5 — Prove the tests can fail  *(gate — a guard you haven't watched fail is not proven)*
 For each new or changed guard: **mutate the source it protects, watch the test go
@@ -174,7 +253,10 @@ and actually runs** — a config that names a gate it doesn't run is lying, and 
 loop is only as honest as the config. **One honest fix attempt on a red gate; a
 second red is hard-stop #2, and the claim stays held.** Record any genuinely
 out-of-scope problem against the **release** — `record_findings` with `component_id`
-**omitted**, never against this component.
+**omitted**, never against this component. But a red gate you did **not** cause — a
+**pre-existing failure outside your `touches`** — is a different case: not hard-stop #2,
+and a release finding notes it without unblocking it. That is the **out-of-scope
+blocker** (see Autonomy above), whose default is **hard-stop-and-surface**.
 
 ### Step 7 — Change-review  *(composes `/marshall:change-review`)*
 Run `/marshall:change-review` against the component diff. It records `kind: change`
@@ -222,6 +304,11 @@ can be fixed inside the acceptance criteria.
   and **changing what either does is out of scope.**
 - **The two gates are non-skippable.** No code before Step 3 survives; no landing
   before Step 8's independent verification. The merge dial governs only the merge.
+- **No silent gate-skip.** The plan and the two gates leave no store footprint, so
+  entering past them means accounting for them **out loud** (Step 0 attestation) —
+  run the gate, run its closest equivalent (a plan-vs-implementation review), or
+  declare it void with the reason. Never assume a non-skippable gate ran, and never
+  let `land-only` become a fast-path around Step 8 or the three hard stops.
 - **A guard you have not watched fail is not proven** — including the wire shape at a
   protocol boundary, not only the code path.
 - **Deliver the acceptance criteria, nothing more.** Out-of-scope problems are release
@@ -230,11 +317,18 @@ can be fixed inside the acceptance criteria.
 - **Exactly three build-loop hard stops** — an unfixable high, CI red after one fix
   attempt, scope ambiguity — and **a hard stop leaves the claim held** so resuming is
   free. Precondition / lease failures are release-topic's stops, not these.
+- **The out-of-scope blocker has a verb.** Being **blocked by a pre-existing failure
+  outside your `touches`** is **hard-stop-and-surface** by default, claim held; a
+  sanctioned fix is a **separate claimed + branched + change-reviewed** sibling recorded
+  on the release, never smuggled into this diff and never merged past the blocked code's
+  owner. A release finding notes the blocker; it does not unblock it.
 - **Resume from the store + git, never conversation memory.** Re-derive the step and
   re-run the covering gate on ambiguity.
-- **The claim is the source of truth, not the branch.** Heartbeat through the long
-  middle; recover a lost claim id through `/marshall:release-topic` (a lookup, never a
-  re-claim).
+- **The claim is the source of truth, not the branch.** Beat an explicit claim at
+  each step boundary and before a long-running operation. A lost claim *id* is a
+  lookup, never a re-claim (`my_claims`); a genuinely *lapsed* lease is a deliberate
+  re-claim — the fence bumps, which is expected — after checking nobody else took the
+  work.
 - **Landing is `merged`, not just unclaiming** — releasing the lock alone leaves
   dependents blocked.
 - **Build stops at one merged component.** It never wraps, deploys, or tags — and it
