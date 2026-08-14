@@ -17,7 +17,7 @@ machines.
 - `mcp__plugin_marshall_marshall__my_claims` — list **your own** live holds (claim id,
   component, fence, machine, lease). The recovery surface after context
   compaction — see **Recovering a lost claim** below.
-- `mcp__plugin_marshall_marshall__heartbeat_claim` — keep the lock alive during long work.
+- `mcp__plugin_marshall_marshall__heartbeat_claim` — keep the lock alive on a cadence tied to the work (see step 4).
   Takes **either** the claim id **or** the `component` id whose hold you own.
 - `mcp__plugin_marshall_marshall__release_claim` — hand it back when the work is parked or done
   (or use `/marshall:release-unclaim`).
@@ -61,9 +61,11 @@ that never calls either is byte-unchanged — `full` is the default on both side
 3. Only after a successful claim, mark the work started:
    `mcp__plugin_marshall_marshall__set_component_state { component, state: "in_progress" }`, then
    create the topic branch (`<type>/<release>-<ref>-<slug>`) and begin work.
-4. During long-running work, call `mcp__plugin_marshall_marshall__heartbeat_claim { claim }`
-   periodically so the lease doesn't lapse. If a heartbeat returns `lease_lost`,
-   **stop** — the claim was lost or revoked; re-claim before continuing.
+4. Keep the claim alive on a cadence tied to the work, not a timer you have to
+   remember: beat it as you finish **each meaningful chunk** of the work, and
+   **immediately before a long-running operation** (a full test run, static
+   analysis). If a heartbeat returns `lease_lost`, **stop** — the lease lapsed or was
+   revoked; recover it deliberately (see **Recovering a lost claim**) before continuing.
 5. When the PR **lands**, advance the work-state so dependents unblock:
    `mcp__plugin_marshall_marshall__set_component_state { component, state: "merged" }`. This is
    separate from the lock — releasing the claim alone does NOT mark it merged,
@@ -104,7 +106,9 @@ hold you own.
 If `my_claims` does **not** list the component, you no longer hold it (the lease
 lapsed, or it was released or revoked). That is a stop — re-claim deliberately
 via step 2 and check nobody else picked the work up; never assume a hold you
-cannot find is still yours.
+cannot find is still yours. A deliberate re-claim after a genuine lapse succeeds and
+**the fence bumps** (2, 3, …) — that increment is expected bookkeeping, not a sign
+anything is wrong; it is how the store fences a stale holder out.
 
 ## Guardrails
 
