@@ -8,7 +8,7 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
-## 1.11.0 — unreleased
+## 1.11.0 — 2026-09-25
 
 The skills say where they run, and reuse the worktree they are in.
 
