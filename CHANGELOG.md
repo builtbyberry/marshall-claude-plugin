@@ -8,6 +8,21 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
+## 1.14.0 - 2026-10-12
+
+Choose the other agent to review a build.
+
+### Changed
+
+- **`release-build` accepts `reviewer: other`.** Claude Code hands the plan
+  pressure-test, the plan-vs-implementation review on resume, and fix verification
+  to Codex in a fresh, read-only session. The same-agent reviewer remains the
+  default for every invocation.
+- **Gate evidence names the reviewer.** A handed-off check records `reviewer` as
+  `codex`; if the hand-off fails, the check falls back to a Claude Code subagent
+  and records `claude-code` with the reason. Missing authentication, a failed
+  command, a timeout, or a missing verdict never counts as a passed gate.
+
 ## 1.13.0 — 2026-10-06
 
 A wrap leaves a mark, and the deploy reads it.
