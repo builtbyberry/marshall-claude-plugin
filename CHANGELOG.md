@@ -8,6 +8,22 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
+## 1.15.0 - 2026-10-16
+
+Name the reviewer's model, and see where a failed hand-off left its log.
+
+### Changed
+
+- **The Codex reviewer runs on your Codex settings.** With nothing said, a hand-off
+  to Codex reads the top-level `model` and `model_reasoning_effort` from your
+  `config.toml` (it still runs with `--ignore-user-config` for everything else). A
+  run can name the reviewer's own — `reviewer model: <name>`, `reviewer effort:
+  <level>` — and those win for that run only.
+- **A fallback names the hand-off folder.** When a hand-off falls back to a Claude
+  Code subagent, the message and the gate record's `verdict` give the hand-off
+  folder's full path, whose `log.txt` holds what Codex said.
+- The hand-off block is checked on codex-cli 0.162.1.
+
 ## 1.14.0 - 2026-10-12
 
 Choose the other agent to review a build.

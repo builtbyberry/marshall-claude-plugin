@@ -288,6 +288,15 @@ resume with nothing said, if a gate record on the part carries
 `reviewer: "codex"`, say so — the operator may want to ask again — and
 stay on the same agent.
 
+**Which model reviews.** With nothing said, the other agent reviews on the model and
+reasoning effort the operator set for it, as the hand-off block below reads them. The
+operator can name the reviewer's model, its reasoning effort, or both, in the same
+invocation — `reviewer: other, reviewer model: <name>, reviewer effort: <level>`, or
+plain words that mean it — and those win. Like the dial, they are asked for on a run
+and never become a standing default. Put what was named between the quotes the block
+marks for it, and leave the quotes empty for what was not; say which model and effort
+you asked for when you resolve the dial.
+
 **What is handed off.** Every check this skill requires to be independent of the
 builder: Step 3's pressure-test of the plan, the plan-vs-implementation review that
 Step 0 runs in its place, and Step 8's verification of the fixes. Step 3 is handed
@@ -300,15 +309,28 @@ commands, checked on the CLI version the block names — an older CLI may refuse
 flag, and that is a fallback too:
 
 ```bash
-# The other agent is Codex. Checked on codex-cli 0.161.0.
+# The other agent is Codex. Checked on codex-cli 0.162.1.
 # 1. Installed, and signed in? If this fails, fall back: run nothing below.
 command -v codex && codex login status
 # 2. A new folder for every hand-off. Write brief.md (and diff.patch) into
 #    the folder this prints.
 handoff=$(mktemp -d) && echo "$handoff"
-# 3. Run it once, from the part's checkout. Set handoff to that folder again
-#    if your shell did not keep it. Read the printed exit= first.
-codex exec --ignore-user-config --sandbox read-only --ephemeral --color never \
+# 3. Run all of this once, as one command, from the part's checkout. Set
+#    handoff to that folder again if your shell did not keep it. Put the
+#    reviewer model or effort the run named between the quotes; left empty,
+#    the top-level ones in config.toml are used. Read the printed exit= first.
+reviewer_model=''; reviewer_effort=''
+toml_top() { awk -v k="$1" -v q="'" '/^[[:space:]]*\[/ { exit }
+  $0 ~ "^[[:space:]]*" k "[[:space:]]*=" { v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
+    c = substr(v, 1, 1); if (c != "\"" && c != q) exit
+    v = substr(v, 2); i = index(v, c); if (i) print substr(v, 1, i - 1); exit }' \
+  "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; }
+[ -n "$reviewer_model" ] || reviewer_model=$(toml_top model)
+[ -n "$reviewer_effort" ] || reviewer_effort=$(toml_top model_reasoning_effort)
+set --
+[ -z "$reviewer_model" ] || set -- "$@" -m "$reviewer_model"
+[ -z "$reviewer_effort" ] || set -- "$@" -c "model_reasoning_effort=\"$reviewer_effort\""
+codex exec --ignore-user-config "$@" --sandbox read-only --ephemeral --color never \
   -C "$(git rev-parse --show-toplevel)" -o "$handoff/verdict.md" - \
   < "$handoff/brief.md" > "$handoff/log.txt" 2>&1; echo "exit=$?"
 ```
@@ -357,7 +379,10 @@ hand-off, in a new folder). A verdict you do not like is never a reason to fall 
 **Falling back.** The other CLI is **missing**, it is **not signed in**, it **exits
 with anything but 0**, it **does not finish** in time, or it finishes **without a
 verdict line** — then run the check with a same-agent subagent, exactly as the
-default does, and **say plainly that it fell back and why**. The fallback is
+default does, and **say plainly that it fell back and why** — naming the hand-off
+folder by its full path when one was made, since its `log.txt` holds what the CLI
+said (a CLI that is missing or not signed in fails before any folder is made, so
+there is none to name). The fallback is
 **always a subagent, never the inline pass**, however small the plan. A failed
 hand-off **never passes a gate on its own**: with no verdict there is no pass until
 the fallback's subagent gives one. A fallback covers that one check only: **each
@@ -368,7 +393,8 @@ Step 8 trying the other agent.
 carries who reviewed, as `reviewer` in its `evidence`: `reviewer: "codex"`
 when the other agent gave the verdict, `reviewer: "claude-code"` when it fell back. Its
 `verdict` text says the same in words — who reviewed, and on a fallback that it fell
-back and why — because the verdict is what a person reads. On the default setting the
+back and why, with the hand-off folder's full path when one was made — because the
+verdict is what a person reads. On the default setting the
 record is written exactly as each step shows, with no `reviewer`. The store's
 independence rule is untouched: Step 8 still mints the verifier's token, the brief
 carries it, and the record is written with it as `session`. `reviewer` says who
@@ -536,7 +562,8 @@ the scope constraint verbatim in its brief. Revise until its verdict is
 record then names it:
 `mcp__plugin_marshall_marshall__record_gate { component, kind: "plan_pressure_tested", outcome: "passed", commit, evidence: { verdict, changes: [...], reviewer: "codex" }, agent: "claude-code", machine, return: "minimal" }`
 — or `reviewer: "claude-code"` when the hand-off fell back and a subagent ran it, with
-the `verdict` saying that it fell back and why.
+the `verdict` saying that it fell back and why, and naming the hand-off folder's full
+path when one was made.
 
 ### Step 4 — Build
 Implement to the surviving plan and the acceptance criteria — **no more.** Do not
@@ -609,7 +636,8 @@ changed, and the diff. Only `VERDICT: VERIFIED` passes the gate; on
 `VERDICT: NOT VERIFIED`, fix what it names and hand off again. The record names it:
 `mcp__plugin_marshall_marshall__record_gate { component, kind: "fixes_verified", outcome: "passed", commit, session: "<the verifier's token>", evidence: { verdict, findings: [<finding id>, ...], reviewer: "codex" }, agent: "claude-code", machine, return: "minimal" }`
 — or `reviewer: "claude-code"` when the hand-off fell back and a subagent verified,
-with the `verdict` saying that it fell back and why. `verifier_not_independent`
+with the `verdict` saying that it fell back and why, and naming the hand-off folder's
+full path when one was made. `verifier_not_independent`
 applies to this record exactly as to the default one.
 
 A **high** `kind: change` finding left `open` or `deferred` is hard-stop #1 unless it
