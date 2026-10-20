@@ -318,18 +318,21 @@ handoff=$(mktemp -d) && echo "$handoff"
 # 3. Run all of this once, as one command, from the part's checkout. Set
 #    handoff to that folder again if your shell did not keep it. Put the
 #    reviewer model or effort the run named between the quotes; left empty,
-#    the top-level ones in config.toml are used. Read the printed exit= first.
+#    the top-level ones in config.toml are used. Its top-level model_provider
+#    is always passed. Read the printed exit= first.
 reviewer_model=''; reviewer_effort=''
 toml_top() { awk -v k="$1" -v q="'" '/^[[:space:]]*\[/ { exit }
   $0 ~ "^[[:space:]]*" k "[[:space:]]*=" { v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
     c = substr(v, 1, 1); if (c != "\"" && c != q) exit
     v = substr(v, 2); i = index(v, c); if (i) print substr(v, 1, i - 1); exit }' \
   "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; }
+reviewer_provider=$(toml_top model_provider)
 [ -n "$reviewer_model" ] || reviewer_model=$(toml_top model)
 [ -n "$reviewer_effort" ] || reviewer_effort=$(toml_top model_reasoning_effort)
 set --
 [ -z "$reviewer_model" ] || set -- "$@" -m "$reviewer_model"
 [ -z "$reviewer_effort" ] || set -- "$@" -c "model_reasoning_effort=\"$reviewer_effort\""
+[ -z "$reviewer_provider" ] || set -- "$@" -c "model_provider=\"$reviewer_provider\""
 codex exec --ignore-user-config "$@" --sandbox read-only --ephemeral --color never \
   -C "$(git rev-parse --show-toplevel)" -o "$handoff/verdict.md" - \
   < "$handoff/brief.md" > "$handoff/log.txt" 2>&1; echo "exit=$?"
