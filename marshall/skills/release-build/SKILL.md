@@ -321,8 +321,8 @@ handoff=$(mktemp -d) && echo "$handoff"
 #    the top-level ones in config.toml are used. Its top-level model_provider
 #    is always passed. Read the printed exit= first.
 reviewer_model=''; reviewer_effort=''
-toml_top() { awk -v k="$1" -v q="'" '/^[[:space:]]*\[/ { exit }
-  $0 ~ "^[[:space:]]*" k "[[:space:]]*=" { v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
+toml_top() { awk -v k="${1}" -v q="'" '/^[[:space:]]*\[/ { exit }
+  $(0) ~ "^[[:space:]]*" k "[[:space:]]*=" { v = $(0); sub(/^[^=]*=[[:space:]]*/, "", v)
     c = substr(v, 1, 1); if (c != "\"" && c != q) exit
     v = substr(v, 2); i = index(v, c); if (i) print substr(v, 1, i - 1); exit }' \
   "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; }
