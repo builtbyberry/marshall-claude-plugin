@@ -8,6 +8,18 @@ publish manifest never touches it. The plugin's version is set at the source in
 `marshall/.claude-plugin/plugin.json`; the heading and git tag here must match
 whatever that render declares.
 
+## 1.15.4 - 2026-11-05
+
+The release skills follow the store's claim and refusal rules, and the session-start hook no longer needs the CLI.
+
+### Changed
+
+- **The release skills say what the store does with claims and refused merges.** `release-parallel` hands each member's setup to `release-topic` in its order and has subagents send `agent`, `machine` and `worktree` on every beat. `release-next` starts work through `release-topic`. `release-topic` documents the hold `set_component_state → in_progress` takes for you. `release-topic`, `release-unclaim` and `release-parallel` say what to do on `missing_gate_records` or `batch_item_failed`: stop, name the gates, write no waiver.
+- **`release-build` says only a `passed` record satisfies a required gate**, never a waiver, and that an absent `required_gates` requires nothing.
+- **`release-deploy` names the new `unsettled_parts` refusal**: a deploy or ship can't start while a part of the release is neither merged nor cancelled.
+- **The `SessionStart` hook works without the `marshall` CLI.** It reads the repo's `state.backend` the way the Codex hook does and says it does not verify the MCP connection, where it used to print "Marshall store connected as …".
+- `/marshall:release-status` points to `/marshall:release-next`, the name Claude installs it under.
+
 ## 1.15.0 - 2026-10-16
 
 Name the reviewer's model, and see where a failed hand-off left its log.
@@ -115,6 +127,56 @@ The skills say where they run, and reuse the worktree they are in.
 - **One claim rule for fresh, continued and lapsed work.** A lapsed or released part is
   re-claimed (the fence bumps); a revoked one stops; one someone else holds stops with
   `Held by <name> on <machine> via <agent> — stopping.`
+
+## 1.10.1 — 2026-08-24
+
+Shared review guidance moves to a plugin-wide folder.
+
+### Changed
+
+- **The review protocol lives at `marshall/references/review-protocol.md`.** It moved
+  out of `skills/_shared/references/`, and `change-review` and `release-readiness`
+  now point at the new path. A skills folder holds only skills.
+- **`release-parallel` names `dispatch_report_fenced_v1`.** It is the claim-and-fence
+  version of `dispatch_report` that supervised execution harnesses use. An older
+  Marshall refuses it instead of quietly writing an unfenced report. Interactive runs
+  keep using `dispatch_report`.
+
+## 1.10.0 — 2026-08-13
+
+`release-build`'s gates enforce instead of aspire.
+
+### Changed
+
+- **A resume says out loud which gates it cannot confirm.** The plan and its
+  pressure-test leave no trace in the store, so a run entered past them names that
+  and runs the pressure-test, runs a plan-vs-implementation review, records your
+  attestation, or declares it void with a reason. It never carries on silently.
+- **A `land-only` entry finishes another session's built and reviewed part.** It runs
+  the gates, the independent verify and the landing, and says the earlier steps were
+  another owner's. Step 8 and the three hard stops still apply. `merge it` and
+  `park it` override the merge default.
+- **The claim is beaten at each step and before each long operation.** This replaces
+  "periodically". `release-topic` says a re-claim after a real lapse bumps the fence,
+  and that a lost claim id is a `my_claims` lookup, not a re-claim.
+- **A failure outside your part has its own stop.** When another part's red blocks
+  yours, the loop stops and asks, and keeps the claim. Any fix is a separate claimed,
+  reviewed part. A release finding records the blocker but does not unblock it.
+
+## 1.9.0 — 2026-08-13
+
+The component loop becomes a skill.
+
+### Added
+
+- **`/marshall:release-build`** carries one part from unclaimed to merged: claim,
+  plan, pressure-test the plan before any code, build, prove the tests can fail,
+  change-review, fix, verify the fixes independently, and land. It uses
+  `release-topic` for the claim and `change-review` for the review. It stops on
+  exactly three things: a high finding it cannot fix inside the acceptance criteria,
+  CI red after one fix attempt, or real scope ambiguity. Each stop keeps the claim
+  held. Landing either merges when clean or stops at `proposed` for a person to merge.
+  The plugin README lists it as the fourteenth skill.
 
 ## 1.8.0 — 2026-08-13
 

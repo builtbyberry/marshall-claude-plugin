@@ -16,7 +16,7 @@ client self-registers, you approve the connection in your browser and pick the
 workspace it may operate in — there is no token to paste or store.
 
 The `marshall` CLI (`@builtbyberry/marshall-cli`) is a separate, agent-agnostic
-path for humans, CI, and hooks. It is not required to use this plugin.
+path for humans and CI. It is not required to use this plugin.
 
 ## What's in here
 
@@ -24,7 +24,7 @@ path for humans, CI, and hooks. It is not required to use this plugin.
 | --- | --- |
 | `marshall/skills/` | The release skills — plan, open, topic, review, wrap, deploy |
 | `marshall/commands/` | `/release-status` |
-| `marshall/hooks/` | Session-start readiness ping (silent unless the repo opts in) |
+| `marshall/hooks/` | Session-start note that the repo opts into Marshall (silent unless it does; no CLI needed) |
 | `marshall/.mcp.json` | The hosted Marshall MCP endpoint |
 
 ## This repository is generated
