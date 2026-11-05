@@ -30,4 +30,4 @@ Read-only. This never claims, releases, or mutates anything.
    `project` set to a candidate's project and `release` set to its slug — that
    pair is unique. Retrying the same bare version just repeats the error.
 
-For *what to start next* (ranked by what it unblocks), use `/release-next`.
+For *what to start next* (ranked by what it unblocks), use `/marshall:release-next`.

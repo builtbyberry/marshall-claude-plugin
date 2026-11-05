@@ -7,7 +7,7 @@ and agents.
 
 The agent talks to the store **natively over MCP** — this plugin connects the
 hosted Marshall MCP server, and the skills drive its tools. The agent-agnostic `marshall`
-CLI (`@builtbyberry/marshall-cli`) stays as a secondary path for humans, CI, and hooks.
+CLI (`@builtbyberry/marshall-cli`) stays as a secondary path for humans and CI.
 codex / cursor adapters will register the same MCP endpoint.
 
 ## What's here
@@ -17,8 +17,8 @@ marshall/
   .claude-plugin/plugin.json   manifest (name, version, keywords)
   .mcp.json                    connects the hosted Marshall MCP server (OAuth)
   commands/release-status.md   /release-status — who holds what + drift
-  hooks/hooks.json             SessionStart: optional CLI readiness ping
-  scripts/session-start.sh     the hook body (silent without the CLI)
+  hooks/hooks.json             SessionStart: repo opt-in note (no CLI needed)
+  scripts/session-start.sh     the hook body (silent unless the repo opts in)
   skills/                      the fourteen release skills:
     release-init               bootstrap a project + release in the store
     release-plan               scope a release into components
@@ -67,6 +67,12 @@ the workspace it may operate in — no token to paste or store. No per-repo opt-
 is needed; enabling the plugin connects it. (The secondary `marshall` CLI authenticates
 with its own bearer token from the environment for human/CI use, and reads its
 store URL from `MARSHALL_URL` — separate from this plugin.)
+
+The `SessionStart` hook speaks only in a repo whose `.claude/release-config.json`
+or `.agents/release-config.json` sets `state.backend` to `"marshall"` (or the older
+`"srm"`). There it tells the agent the repo uses Marshall and that the hook does
+**not** verify the MCP connection — run `/marshall:release-next` for that. It needs
+no CLI and makes no network call; everywhere else it prints nothing.
 
 ## Status
 
