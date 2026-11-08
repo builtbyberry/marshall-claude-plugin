@@ -8,6 +8,7 @@
     "marshall/README.md",
     "marshall/commands/release-status.md",
     "marshall/hooks/hooks.json",
+    "marshall/hooks/register.ts",
     "marshall/references/review-protocol.md",
     "marshall/scripts/session-start.sh",
     "marshall/skills/change-review/SKILL.md",
@@ -23,5 +24,6 @@
     "marshall/skills/release-readiness/SKILL.md",
     "marshall/skills/release-topic/SKILL.md",
     "marshall/skills/release-unclaim/SKILL.md",
-    "marshall/skills/release-wrap/SKILL.md"
+    "marshall/skills/release-wrap/SKILL.md",
+    "marshall/tests/guard.test.ts"
 ]
