@@ -2,10 +2,11 @@ import type { EngineInterface, McpToolResult, Register } from 'claude-code'
 
 /**
  * The Marshall mod: keeps this checkout's claims alive, shows the release on
- * the status line, refuses a PR merge the store says should wait, keeps the
- * store true from what the agent actually does, and stops an edit landing in
- * a file another live claim is already editing. Silent in every repo that has
- * not opted into Marshall.
+ * the status line, refuses a PR merge the store says should wait, holds an
+ * autonomous claim to its part's autonomy level, stops a paused worker, keeps
+ * the store true from what the agent actually does, and stops an edit landing
+ * in a file another live claim is already editing. Silent in every repo that
+ * has not opted into Marshall.
  */
 
 const MARSHALL = 'plugin:marshall:marshall'
@@ -39,6 +40,33 @@ const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'] as const
 const CLAIM_TOOLS = (['claim_component', 'release_claim', 'revoke_claim', 'set_component_state', 'set_component_states'] as const).map(tool => `${TOOL_PREFIX}${tool}` as const)
 
 /**
+ * What still runs while a claim is paused: Marshall's reads, the heartbeat
+ * (how a resume is learned), handing the claim back (the store allows it),
+ * a resume a person asks for (the store decides who may), and loading those
+ * deferred tools. Everything else waits for the person.
+ */
+const PAUSE_EXEMPT = new Set<string>([
+  ...[
+    'release_get',
+    'release_next',
+    'release_status',
+    'release_list',
+    'release_changelog',
+    'project_list',
+    'my_claims',
+    'dispatch_get',
+    'lenses_get',
+    'lenses_applicable',
+    'worker_list',
+    'autonomy_get',
+    'heartbeat_claim',
+    'release_claim',
+    'worker_resume',
+  ].map(tool => `${TOOL_PREFIX}${tool}`),
+  'ToolSearch',
+])
+
+/**
  * The store tools this module calls itself, and so the only ones its
  * tool.check hook ever speaks for.
  */
@@ -70,7 +98,21 @@ type ReleaseSummary = {
   claims: { id: string; component_id: string }[]
 }
 
-type Claim = { id: string; component_id: string; worktree: string | null; machine?: string | null }
+type Claim = {
+  id: string
+  component_id: string
+  worktree: string | null
+  machine?: string | null
+  mode?: string
+  paused_at?: string | null
+  paused_by?: { display_name?: string } | null
+}
+
+type Setting = { value?: string | null; source?: string | null }
+
+type Policy = { level?: Setting; merge_to_main?: Setting }
+
+type Autonomy = { enabled?: boolean; policy?: Policy; approval?: { head_sha?: string | null } | null } | null
 
 type Component = {
   id: string
@@ -80,15 +122,31 @@ type Component = {
   state: string
   topic_branch: string | null
   pull_request: { number: number | null; url: string | null } | null
+  autonomy?: Autonomy
 }
 
-type ReleaseDocument = { slug: string; config: { release_branch?: string }; components: Component[] }
+type ReleaseDocument = {
+  slug: string
+  config: { release_branch?: string }
+  components: Component[]
+  autonomy?: Autonomy
+  dispatch_runs?: { closed_at?: string | null }[]
+}
 
 type Checkout = { root: string; branch: string }
 
-type Seen = { place: Checkout; releases: ReleaseSummary[]; localClaims: Claim[]; release: ReleaseSummary | undefined }
+type Seen = { place: Checkout; releases: ReleaseSummary[]; claims: Claim[]; localClaims: Claim[]; release: ReleaseSummary | undefined }
 
-type Held = { claim: Claim; release: ReleaseSummary; component: Component; releaseBranch: string | undefined }
+type Held = { claim: Claim; release: ReleaseSummary; component: Component; releaseBranch: string | undefined; document: ReleaseDocument }
+
+/** Who paused a claim and when, as the store said it. */
+type Pause = { by: string | undefined; at: string | undefined; part: string | undefined }
+
+/** A guard's refusal: what the agent reads, and a short line for the toast. */
+type Denial = { deny: string; toast: string }
+
+/** A refusal's JSON body: `{error, message, ...detail}`. */
+type Refusal = { error?: unknown; paused_by?: { display_name?: string } | null; paused_at?: string | null; component?: { slug?: string | null } | null }
 
 type PullRequest = { number: number; url: string; state: string; headRefName: string; baseRefName: string; mergeCommit: { oid: string } | null }
 
@@ -134,9 +192,15 @@ let lastView: { view: View; at: number } | undefined
 let declaredNote: string | undefined
 let checkPausedUntil = 0
 let uncheckedToasted = false
+let lastRoot: string | undefined
 const checked = new Map<string, Map<string, Verdict>>()
 const warned = new Set<string>()
 const pending = new Map<string, Set<string>>()
+/** The claims a person has paused, by claim id; kept to the claims still live. */
+const pauses = new Map<string, Pause>()
+/** The claims each loop beat or took itself, so a pause stops only that loop. */
+const loopClaims = new Map<string, Set<string>>()
+const pauseToasted = new Set<string>()
 
 /**
  * Reads a Marshall tool's JSON answer out of its first text block.
@@ -172,7 +236,94 @@ const call = async <T>($: EngineInterface, tool: (typeof OWN_TOOLS)[number], arg
   }
 }
 
-const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 200)
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
+const errorText = (error: unknown): string => messageOf(error).slice(0, 200)
+
+/**
+ * The JSON object a store answer carries, from its whole text (an answer or
+ * an error body): a worker_paused body runs past what errorText keeps.
+ */
+const jsonBodyOf = (text: string | undefined): Record<string, unknown> | undefined => {
+  const at = text?.indexOf('{') ?? -1
+
+  if (text === undefined || at < 0) {
+    return undefined
+  }
+
+  try {
+    const body = JSON.parse(text.slice(at)) as unknown
+
+    return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const refusalOf = (text: string | undefined): Refusal | undefined => jsonBodyOf(text) as Refusal | undefined
+
+/**
+ * The one writer of the pause state: a pause is marked from a worker_paused
+ * refusal or a my_claims row (keeping what an earlier read knew that this one
+ * does not), and cleared by a beat that ran, a row read unpaused, the claim
+ * ending, or a read that failed (fail open).
+ */
+const markPaused = (id: string, seen: { by?: string | null; at?: string | null; part?: string | null }): void => {
+  const known = pauses.get(id)
+
+  pauses.set(id, { by: seen.by ?? known?.by, at: seen.at ?? known?.at, part: seen.part ?? known?.part })
+}
+
+const clearPause = (id: string): void => {
+  pauses.delete(id)
+  pauseToasted.delete(id)
+}
+
+const clearPauses = (): void => {
+  for (const id of [...pauses.keys()]) {
+    clearPause(id)
+  }
+}
+
+const markRefused = (id: string, refusal: Refusal): void =>
+  markPaused(id, { by: refusal.paused_by?.display_name, at: refusal.paused_at, part: refusal.component?.slug })
+
+/**
+ * Keeps the pauses to the claims my_claims still lists: a stopped, revoked,
+ * released or lapsed claim is gone, and so is its pause.
+ */
+const syncPauses = (claims: Claim[]): void => {
+  const live = new Set(claims.map(claim => claim.id))
+
+  for (const id of [...pauses.keys()]) {
+    if (!live.has(id)) {
+      clearPause(id)
+    }
+  }
+
+  for (const ids of loopClaims.values()) {
+    for (const id of [...ids]) {
+      if (!live.has(id)) {
+        ids.delete(id)
+      }
+    }
+  }
+
+  for (const claim of claims) {
+    if (typeof claim.paused_at === 'string') {
+      markPaused(claim.id, { by: claim.paused_by?.display_name, at: claim.paused_at })
+    } else if (claim.paused_at === null) {
+      clearPause(claim.id)
+    }
+  }
+}
+
+const pausedText = (pause: Pause): string =>
+  [
+    `Marshall: your claim${pause.part === undefined ? '' : ` on ${pause.part}`} is paused${pause.by === undefined ? '' : ` by ${pause.by}`}${pause.at === undefined ? '' : ` at ${pause.at}`}.`,
+    'Stop work now: do not retry in a loop or route around this. Reads of Marshall and the heartbeat still run.',
+    'Wait for the person to resume it (the Workers screen in Marshall; for a supervised claim of your own, worker_resume on their word), or hand the claim back with release_claim.',
+  ].join(' ')
 
 const looksRefused = (message: string): boolean => /permission|not allowed|denied|refused|classifier|auto mode/i.test(message)
 
@@ -261,6 +412,7 @@ const readView = async ($: EngineInterface): Promise<View> => {
   const { releases } = await call<{ releases: ReleaseSummary[] }>($, 'release_list')
   const { claims } = await call<{ claims: Claim[] }>($, 'my_claims')
 
+  syncPauses(claims)
   lastView = { view: { releases, claims }, at: await $.clock.now() }
 
   return { releases, claims }
@@ -279,17 +431,20 @@ const look = async ($: EngineInterface): Promise<Seen | undefined> => {
   const { releases, claims } = await readView($)
   const localClaims = claims.filter(claim => isLocal(claim, place.root))
 
-  return { place, releases, localClaims, release: currentRelease(releases, localClaims, place) }
+  lastRoot = place.root
+
+  return { place, releases, claims, localClaims, release: currentRelease(releases, localClaims, place) }
 }
 
 /**
- * The components held from this checkout, each with its release.
+ * The components held from this checkout (or the given claims), each with
+ * its release.
  */
-const held = async ($: EngineInterface, seen: Seen): Promise<Held[]> => {
+const held = async ($: EngineInterface, seen: Seen, claims: Claim[] = seen.localClaims): Promise<Held[]> => {
   const found: Held[] = []
   const documents = new Map<string, ReleaseDocument>()
 
-  for (const claim of seen.localClaims) {
+  for (const claim of claims) {
     const release = seen.releases.find(candidate => candidate.claims.some(owned => owned.id === claim.id))
 
     if (release === undefined) {
@@ -302,7 +457,7 @@ const held = async ($: EngineInterface, seen: Seen): Promise<Held[]> => {
     const component = document.components.find(candidate => candidate.id === claim.component_id)
 
     if (component !== undefined) {
-      found.push({ claim, release, component, releaseBranch: document.config.release_branch })
+      found.push({ claim, release, component, releaseBranch: document.config.release_branch, document })
     }
   }
 
@@ -345,8 +500,16 @@ const beat = async ($: EngineInterface): Promise<void> => {
     for (const claim of seen.localClaims) {
       try {
         await call($, 'heartbeat_claim', { claim: claim.id })
+        clearPause(claim.id)
       } catch (error) {
+        const refusal = refusalOf(messageOf(error))
         const message = errorText(error)
+
+        if (refusal?.error === 'worker_paused') {
+          markRefused(claim.id, refusal)
+
+          continue
+        }
 
         notes.push(looksRefused(message) ? `beat refused: ${ALLOW_HINT}` : /lease_lost/.test(message) ? 'lease lost' : `beat failed: ${message.slice(0, 60)}`)
       }
@@ -355,15 +518,31 @@ const beat = async ($: EngineInterface): Promise<void> => {
     notes.push('idle, not beating')
   }
 
+  for (const claim of seen.localClaims) {
+    const pause = pauses.get(claim.id)
+
+    if (pause !== undefined) {
+      notes.push(pause.by === undefined ? 'paused' : `paused by ${pause.by}`)
+    }
+  }
+
   lastLine = seen.release === undefined ? undefined : describe(seen.release, seen.localClaims.length)
   $.ui.status(withNotes(lastLine, [...new Set(notes)]))
 }
 
+/**
+ * A beat that could not read the store says so on the status line. A pause
+ * it can no longer confirm is lifted (fail open, like every check here): the
+ * store still refuses a paused worker's writes, and a resume made while the
+ * store was out of reach would otherwise never be seen.
+ */
 const beatQuietly = ($: EngineInterface): Promise<void> =>
   beat($).catch(error => {
     const message = errorText(error)
+    const unchecked = pauses.size > 0 ? ' · pause unchecked' : ''
 
-    $.ui.status(looksRefused(message) ? `Marshall refused: ${ALLOW_HINT}` : `Marshall unreachable: ${message.slice(0, 80)}`)
+    clearPauses()
+    $.ui.status(looksRefused(message) ? `Marshall refused: ${ALLOW_HINT}${unchecked}` : `Marshall unreachable: ${message.slice(0, 80)}${unchecked}`)
   })
 
 const arm = ($: EngineInterface): void => {
@@ -587,10 +766,55 @@ const observeMerge = async ($: EngineInterface, gh: GhCall, before: PullRequest 
 }
 
 /**
- * Marshall's own guard: a merge waits while the release has untriaged high
- * findings. Release-wide, as findings carry no PR.
+ * Whether the store's autonomy rules bind this held part: the claim is
+ * autonomous and the workspace has autonomy on. A store that reports neither
+ * (older than autonomy) binds nothing, and nor does a supervised claim.
  */
-const guardMerge = async ($: EngineInterface, before: PullRequest | undefined): Promise<{ deny: string } | { unchecked: string } | undefined> => {
+const isGated = (work: Held): boolean => work.claim.mode === 'autonomous' && work.document.autonomy?.enabled === true
+
+const levelOf = (work: Held): Setting | undefined => work.component.autonomy?.policy?.level
+
+const fromLayer = (setting: Setting | undefined): string => (setting?.source ? ` (set on the ${setting.source})` : '')
+
+/**
+ * The part a held claim on this Mac owns that the PR or branch belongs to:
+ * any worktree on this machine, so a subagent working a sibling worktree is
+ * held to its own part's level.
+ */
+const onMachine = (seen: Seen): Claim[] => seen.claims.filter(onThisMachine)
+
+/**
+ * Before `gh pr create`: an autonomous claim at level suggest reports back
+ * instead of opening a pull request.
+ */
+const guardCreate = async ($: EngineInterface, gh: GhCall): Promise<Denial | { unchecked: string } | undefined> => {
+  const seen = await look($)
+
+  if (seen === undefined) {
+    return undefined
+  }
+
+  const branch = (gh.head ?? seen.place.branch).split(':').pop()
+  const work = (await held($, seen, onMachine(seen))).find(({ component }) => component.topic_branch === branch)
+
+  if (work === undefined || !isGated(work) || levelOf(work)?.value !== 'suggest') {
+    return undefined
+  }
+
+  return {
+    deny: `Marshall: ${work.component.slug} is at autonomy level suggest${fromLayer(levelOf(work))} and this claim is autonomous, so it reports back instead of opening a pull request. Write up what you found and stop; a person decides what lands.`,
+    toast: `Marshall held a pull request: ${work.component.slug} is at level suggest`,
+  }
+}
+
+/**
+ * Marshall's own guard: a merge waits while the release has untriaged high
+ * findings (release-wide, as findings carry no PR). For an autonomous claim it
+ * also waits for a person: a part's PR at level suggest or at pr_and_wait
+ * with no approval, and the release PR while its merge to main needs a person
+ * and nobody has approved it.
+ */
+const guardMerge = async ($: EngineInterface, before: PullRequest | undefined): Promise<Denial | { unchecked: string } | undefined> => {
   const seen = await look($)
 
   if (seen === undefined) {
@@ -604,7 +828,53 @@ const guardMerge = async ($: EngineInterface, before: PullRequest | undefined): 
   }
 
   if (release.findings.high_open > 0) {
-    return { deny: `Marshall: ${release.slug} has ${release.findings.high_open} untriaged high finding(s). Fix, accept or defer them before merging.` }
+    return {
+      deny: `Marshall: ${release.slug} has ${release.findings.high_open} untriaged high finding(s). Fix, accept or defer them before merging.`,
+      toast: `Marshall held a merge: ${release.slug} has untriaged high findings`,
+    }
+  }
+
+  if (before === undefined) {
+    return undefined
+  }
+
+  const work = (await held($, seen, onMachine(seen))).find(({ component }) =>
+    component.pull_request?.number != null ? component.pull_request.number === before.number : component.topic_branch === before.headRefName,
+  )
+
+  if (work !== undefined && isGated(work)) {
+    const level = levelOf(work)
+
+    if (level?.value === 'suggest') {
+      return {
+        deny: `Marshall: ${work.component.slug} is at autonomy level suggest${fromLayer(level)} and this claim is autonomous: it does not land. Report back and stop.`,
+        toast: `Marshall held a merge: ${work.component.slug} is at level suggest`,
+      }
+    }
+
+    if (level?.value === 'pr_and_wait' && (work.component.autonomy?.approval ?? null) === null) {
+      return {
+        deny: `Marshall: ${work.component.slug} is at autonomy level pr_and_wait${fromLayer(level)} and no person has approved its merge. Leave the PR open and the part proposed: a person must click Approve merge for the part on the release page in Marshall. Once they have, merge with --match-head-commit set to the head the approval names, if it names one.`,
+        toast: `Marshall held a merge: ${work.component.slug} waits for a person's approval`,
+      }
+    }
+  }
+
+  const releasePr = releaseByBranch(seen.releases, before.headRefName, seen.place.root)
+
+  if (releasePr === undefined) {
+    return undefined
+  }
+
+  const document = await call<ReleaseDocument>($, 'release_get', { project: releasePr.project, release: releasePr.slug, view: 'full' })
+  const autonomy = document.autonomy
+  const isDriven = (document.dispatch_runs ?? []).some(run => run.closed_at === null || run.closed_at === undefined)
+
+  if (autonomy?.enabled === true && isDriven && autonomy.policy?.merge_to_main?.value === 'person' && (autonomy.approval ?? null) === null) {
+    return {
+      deny: `Marshall: ${releasePr.slug}'s merge to main needs a person${fromLayer(autonomy.policy.merge_to_main)}, an autonomous run is open on it, and no person has approved the release. Stop: a person must click Approve merge on the release page in Marshall, or merge it themselves.`,
+      toast: `Marshall held a merge: ${releasePr.slug} needs a person to merge to main`,
+    }
   }
 
   return undefined
@@ -890,6 +1160,29 @@ const editedPath = (e: { tool: string }): string | undefined => {
 export const ownCallVerdict = <V extends { decision: 'allow' | 'ask' | 'deny' }>(origin: string, plugin: string, verdict: V): V =>
   origin !== plugin || verdict.decision === 'deny' ? verdict : { ...verdict, decision: 'allow' }
 
+/**
+ * The claims a loop works: the ones it beat or took itself, and for the main
+ * loop the claims taken from this checkout.
+ */
+const claimsOfLoop = (loop: string): string[] => {
+  const own = [...(loopClaims.get(loop) ?? [])]
+  const local = loop === MAIN_LOOP && lastRoot !== undefined ? (lastView?.view.claims ?? []).filter(claim => isLocal(claim, lastRoot as string)).map(claim => claim.id) : []
+
+  return [...new Set([...own, ...local])]
+}
+
+const pauseOf = (ids: string[]): { id: string; pause: Pause } | undefined => {
+  for (const id of ids) {
+    const pause = pauses.get(id)
+
+    if (pause !== undefined) {
+      return { id, pause }
+    }
+  }
+
+  return undefined
+}
+
 const bump = async ($: EngineInterface): Promise<void> => {
   lastActivityAt = await $.clock.now()
 }
@@ -970,9 +1263,22 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // Any tool call is activity, and one still running keeps the session awake.
+  // While a claim this loop works is paused, only the reads, the heartbeat,
+  // a hand-back and a resume run.
   on('tool.call', async ($, e, next) => {
     if (!optedIn) {
       return next(e)
+    }
+
+    const pause = PAUSE_EXEMPT.has(e.tool) ? undefined : pauseOf(claimsOfLoop(e.agentId ?? MAIN_LOOP))
+
+    if (pause !== undefined) {
+      if (!pauseToasted.has(pause.id)) {
+        pauseToasted.add(pause.id)
+        $.ui.toast(`Marshall: this worker is paused${pause.pause.by === undefined ? '' : ` by ${pause.pause.by}`}; its tool calls wait for a resume`)
+      }
+
+      return { deny: pausedText(pause.pause) }
     }
 
     callsInFlight++
@@ -999,16 +1305,19 @@ export const register: Register = on => {
     if (gh.verb === 'merge') {
       // Read before the merge: --delete-branch moves the checkout off the PR.
       before = await viewPr($, gh, gh.selector).catch(() => undefined)
-      const verdict = await guardMerge($, before).catch(error => ({ unchecked: `the guard failed: ${errorText(error)}` }))
+    }
 
-      if (verdict !== undefined && 'deny' in verdict) {
-        return verdict
-      }
+    const verdict = await (gh.verb === 'merge' ? guardMerge($, before) : guardCreate($, gh)).catch(error => ({ unchecked: `the guard failed: ${errorText(error)}` }))
 
-      if (verdict !== undefined) {
-        unchecked = `Marshall did not check this merge (${verdict.unchecked}); it ran unchecked.`
-        $.ui.toast(unchecked)
-      }
+    if (verdict !== undefined && 'deny' in verdict) {
+      $.ui.toast(verdict.toast)
+
+      return { deny: verdict.deny }
+    }
+
+    if (verdict !== undefined) {
+      unchecked = `Marshall did not check this ${gh.verb === 'merge' ? 'merge' : 'pull request'} (${verdict.unchecked}); it ran unchecked.`
+      $.ui.toast(unchecked)
     }
 
     const ran = await next(e)
@@ -1049,6 +1358,11 @@ export const register: Register = on => {
     }
 
     const checkedEdit = await checkEdit($, given, e.agentId ?? MAIN_LOOP)
+    const holderPause = checkedEdit?.target === undefined ? undefined : pauses.get(checkedEdit.target.claim.id)
+
+    if (holderPause !== undefined) {
+      return { deny: pausedText(holderPause) }
+    }
 
     if (checkedEdit !== undefined && 'verdict' in checkedEdit && 'refuse' in checkedEdit.verdict) {
       $.ui.toast(`Marshall refused an edit to ${checkedEdit.target.path}: another claim is working in it`)
@@ -1099,6 +1413,46 @@ export const register: Register = on => {
     const ran = await next(e)
 
     lastView = undefined
+
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // The model's own heartbeats and claims say which claim each loop works,
+  // and a heartbeat refused worker_paused is the moment a pause is learned.
+  on('tool.call', { tool: [`${TOOL_PREFIX}heartbeat_claim`, `${TOOL_PREFIX}claim_component`] }, async ($, e, next) => {
+    const ran = await next(e)
+
+    if (!optedIn || ran.deny !== undefined) {
+      return ran
+    }
+
+    const input = e as { claim?: unknown; component?: unknown }
+    const answered = ran.isError === true ? undefined : jsonBodyOf(ran.text)
+    const id =
+      typeof answered?.id === 'string'
+        ? answered.id
+        : typeof input.claim === 'string'
+          ? input.claim
+          : lastView?.view.claims.find(claim => claim.component_id === input.component)?.id
+
+    if (id === undefined) {
+      return ran
+    }
+
+    const loop = e.agentId ?? MAIN_LOOP
+    const ids = loopClaims.get(loop) ?? new Set<string>()
+
+    loopClaims.set(loop, ids.add(id))
+
+    if (ran.isError === true) {
+      const refusal = refusalOf(ran.text)
+
+      if (refusal?.error === 'worker_paused') {
+        markRefused(id, refusal)
+      }
+    } else if (e.tool === `${TOOL_PREFIX}heartbeat_claim`) {
+      clearPause(id)
+    }
 
     return ran
   }).catch(($, e, next) => next(e))
