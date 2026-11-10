@@ -41,7 +41,7 @@ marshall/
     release-admin              archive / restore / delete a record (corrective)
 ```
 
-The skills drive all forty-three MCP tools, each prefixed with the plugin's
+The skills drive fifty-two of the store's MCP tools, each prefixed with the plugin's
 connection name — `mcp__plugin_marshall_marshall__release_next`, and so on. They
 span the read path (`release_get`, `release_next`, `release_status`,
 `project_list`, `release_changelog`), the write path (`project_create`,
@@ -52,10 +52,13 @@ lifecycle (`claim_component`, `heartbeat_claim`, `release_claim`, `revoke_claim`
 `resolve_finding`/`resolve_findings`, `lenses_get`, `lenses_applicable`,
 `set_release_lenses`), dispatch (`dispatch_open`, `dispatch_report`/
 `dispatch_reports`, `dispatch_get`, `dispatch_close`), deploy and ship
-(`set_deploy_step`, `set_ship_step`), and the corrective lifecycle
-(`archive_*` / `unarchive_*` / `hard_delete_*`).
+(`set_deploy_step`, `set_ship_step`), autonomy and the kill switch
+(`autonomy_get`, `worker_list`, `worker_pause`/`worker_stop`/`worker_resume`), and
+the corrective lifecycle (`archive_*` / `unarchive_*` / `hard_delete_*`).
 
-Every registered tool is referenced by at least one skill, and CI enforces it —
+Every other registered tool is either referenced by a skill or named, with its
+reason, as one no skill calls (`release_list`, the two the mod calls, and the
+owner's `workspace_autonomy_update`), and CI enforces it —
 a tool the server exposes but no skill mentions is a capability no operator can
 discover, which is how the first two audits found twenty-one of them sitting
 unused.
@@ -104,6 +107,9 @@ nearest `.claude/release-config.json` or `.agents/release-config.json` setting
   or `echo gh pr merge` does not. If the check itself fails (the store is
   unreachable, no release matches), the merge runs and the agent and a toast say
   it ran unchecked.
+- **Holds an autonomous claim to its part's autonomy level** (see "Autonomy and the
+  kill switch" below).
+- **Stops a paused worker** until a person resumes it.
 - **Stops an edit landing in a file another agent is working in** (see "The
   collision check" below).
 - **Keeps the store true from what the agent does** (see below).
@@ -140,6 +146,41 @@ same call again (`proposed` → `proposed` is an `invalid_transition`). When a
 store write fails the command is never blocked: the failure is named on the
 status line (`not recorded: …`) and in a toast, and the agent is given the exact
 calls to make by hand, with the store's answer.
+
+### Autonomy and the kill switch
+
+A claim's `mode` is the store's: `autonomous` when its part was a member of an open
+dispatch run when it was taken, otherwise `supervised`. While the release's
+`autonomy.enabled` is `true`, for an **autonomous** claim this Mac holds (in any
+worktree, so a release-parallel subagent's claim counts too), the mod refuses:
+
+| You run | Refused when |
+| --- | --- |
+| `gh pr create` on the part's topic branch (the current branch, or `--head`) | the part's level is `suggest`: it reports back instead |
+| `gh pr merge` of the part's PR | the level is `suggest`, or `pr_and_wait` and no person has approved the part (Approve merge for the part on the release page) |
+| `gh pr merge` of the release PR (its head is `release/<slug>`) | an autonomous run is open on the release, its merge to main is `person`, and no person has approved the release |
+
+A **supervised** claim is never held to the level: the person's word in chat is
+enough. A store that reports no `mode` or no `autonomy` gates nothing. If the policy
+cannot be read (`release_get` fails), the command runs and the agent and a toast say
+it ran unchecked, as for the merge guard.
+
+**A paused claim stops its worker**, supervised or autonomous. The mod learns the
+pause from `my_claims` (`paused_at`, `paused_by`), from its own heartbeat refused
+`worker_paused`, and from the model's own `heartbeat_claim` refused the same way. While
+a claim is paused, every tool call of the loop working it — the main loop for a claim
+taken in this checkout, a subagent for the claim it beat itself — and every edit into
+that claim's worktree is refused, naming who paused it and when. Still allowed: Marshall's
+reads (`release_get`, `release_next`, `release_status`, `release_list`,
+`release_changelog`, `project_list`, `my_claims`, `dispatch_get`, `lenses_get`,
+`lenses_applicable`, `worker_list`, `autonomy_get`), `heartbeat_claim`, `release_claim`
+(handing the claim back), `worker_resume` (the store decides who may resume) and
+`ToolSearch`. The status line shows `paused by <name>`. A beat that succeeds, a
+`my_claims` that shows it unpaused, or the claim ending (a stop revokes it) lifts it:
+after a resume on the Workers screen the session waits at most one heartbeat (60 s).
+A heartbeat that cannot read the store lifts the pauses it knew of and says so on the
+status line (`Marshall unreachable: … · pause unchecked`): like every check here it
+fails open, and the store still refuses a paused worker's writes.
 
 ### The collision check
 

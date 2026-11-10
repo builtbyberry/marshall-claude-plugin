@@ -33,6 +33,13 @@ type Fixture = {
   hanging?: string[]
   switchedOff?: boolean
   realPaths?: Record<string, string>
+  mode?: string
+  elsewhereMode?: string
+  live?: { paused_at?: string | null; paused_by?: { display_name: string } | null; gone?: boolean; elsewhereGone?: boolean }
+  autonomy?: Record<string, unknown> | null
+  releaseAutonomy?: Record<string, unknown> | null
+  dispatchRuns?: { closed_at: string | null }[]
+  toolAnswers?: Record<string, { text: string; isError?: boolean }>
 }
 
 const openPr: Pr = {
@@ -74,6 +81,13 @@ const engine = (on: On, fixture: Fixture = {}) => {
     hanging = [],
     switchedOff = false,
     realPaths = {},
+    mode,
+    elsewhereMode,
+    live = {},
+    autonomy,
+    releaseAutonomy,
+    dispatchRuns,
+    toolAnswers = {},
   } = fixture
   const calls: { tool: string; args: Record<string, unknown> }[] = []
   const statuses: (string | undefined)[] = []
@@ -191,8 +205,29 @@ const engine = (on: On, fixture: Fixture = {}) => {
     if (e.tool === 'my_claims') {
       return text({
         claims: [
-          { id: 'mine-here', component_id: 'c-guard', worktree: localWorktree, machine: localMachine },
-          { id: 'mine-elsewhere', component_id: 'c-touches', worktree: '/work/swarm-release-manager-touches', machine: HOST },
+          ...(live.gone === true
+            ? []
+            : [
+                {
+                  id: 'mine-here',
+                  component_id: 'c-guard',
+                  worktree: localWorktree,
+                  machine: localMachine,
+                  ...(mode === undefined ? {} : { mode }),
+                  ...(live.paused_at === undefined ? {} : { paused_at: live.paused_at, paused_by: live.paused_by ?? null }),
+                },
+              ]),
+          ...(live.elsewhereGone === true
+            ? []
+            : [
+                {
+                  id: 'mine-elsewhere',
+                  component_id: 'c-touches',
+                  worktree: '/work/swarm-release-manager-touches',
+                  machine: HOST,
+                  ...(elsewhereMode === undefined ? {} : { mode: elsewhereMode }),
+                },
+              ]),
           ...extraClaims,
         ],
       })
@@ -202,6 +237,8 @@ const engine = (on: On, fixture: Fixture = {}) => {
       return text({
         slug: 'claude-mod',
         config: { release_branch: 'release/claude-mod' },
+        ...(releaseAutonomy === undefined ? {} : { autonomy: releaseAutonomy }),
+        ...(dispatchRuns === undefined ? {} : { dispatch_runs: dispatchRuns }),
         components: [
           {
             id: 'c-guard',
@@ -211,6 +248,7 @@ const engine = (on: On, fixture: Fixture = {}) => {
             state: componentState,
             topic_branch: 'feat/claude-mod-guard-mod',
             pull_request: pullRequest,
+            ...(autonomy === undefined ? {} : { autonomy }),
           },
           {
             id: 'c-touches',
@@ -238,6 +276,12 @@ const engine = (on: On, fixture: Fixture = {}) => {
   on('session.compact', () => ({ messages: [{ role: 'user' as const, text: 'summary', toolUses: [] }] }))
   on('tool.call', (_, e) => {
     commands.push(String('command' in e ? e.command : e.tool))
+
+    const answer = toolAnswers[e.tool]
+
+    if (answer !== undefined) {
+      return (answer.isError === true ? { result: answer.text, isError: true, text: answer.text } : { result: answer.text, text: answer.text }) as never
+    }
 
     if (bashDenied) {
       return { deny: 'refused by a rule' }
@@ -1252,6 +1296,348 @@ test('a file name the store cannot take is neither checked nor reported, and is 
   expect(context(ran)).toMatch(/it ran unchecked/)
   expect(asked()).toEqual([])
   expect(recorded()).toEqual([])
+})
+
+// ── Autonomy: the part's level and the release's merge to main ─────────────
+
+const autonomyAt = (level: string, approval: Record<string, unknown> | null = null) => ({
+  policy: {
+    agent_ok: { value: true, source: 'default' },
+    level: { value: level, source: 'part' },
+    merge_to_main: { value: 'person', source: 'default', part: null },
+    cap: { value: 3, source: 'default' },
+  },
+  approval,
+})
+
+const releaseOn = (mergeToMain: string, approval: Record<string, unknown> | null = null, enabled = true) => ({
+  enabled,
+  policy: { level: { value: 'merge', source: 'default' }, merge_to_main: { value: mergeToMain, source: 'release', part: null } },
+  approval,
+})
+
+const releasePr: Pr = { number: 702, url: 'https://github.com/o/r/pull/702', state: 'OPEN', headRefName: 'release/claude-mod', baseRefName: 'main', mergeCommit: null }
+
+const create = 'gh pr create --base release/claude-mod --title "guard-mod" --body-file /tmp/b.md'
+
+test('an autonomous claim at level suggest may not open a pull request', async ($, on) => {
+  const { commands, writes, toasts } = engine(on, { mode: 'autonomous', autonomy: autonomyAt('suggest'), releaseAutonomy: releaseOn('person') })
+
+  await start($)
+  const ran = await bash($, create)
+
+  expect(ran.deny).toMatch(/guard-mod is at autonomy level suggest \(set on the part\) and this claim is autonomous, so it reports back/)
+  expect(commands).toEqual([])
+  expect(writes()).toEqual([])
+  expect(toasts.at(-1)).toBe('Marshall held a pull request: guard-mod is at level suggest')
+})
+
+test('a suggest part opened from a sibling worktree with --head is held to its level too', async ($, on) => {
+  const { commands } = engine(on, {
+    localWorktree: '/elsewhere',
+    branch: 'release/claude-mod',
+    mode: 'autonomous',
+    autonomy: autonomyAt('suggest'),
+    releaseAutonomy: releaseOn('person'),
+  })
+
+  await start($)
+
+  expect((await bash($, `${create} --head feat/claude-mod-guard-mod`)).deny).toMatch(/level suggest/)
+  expect(commands).toEqual([])
+})
+
+test('a supervised claim opens its pull request at suggest', async ($, on) => {
+  const supervised = engine(on, { mode: 'supervised', autonomy: autonomyAt('suggest'), releaseAutonomy: releaseOn('person') })
+
+  await start($)
+
+  expect((await bash($, create)).deny).toBeUndefined()
+  expect(supervised.commands).toEqual([create])
+})
+
+test('autonomy off for the workspace: an autonomous claim at suggest is not gated', async ($, on) => {
+  const { commands } = engine(on, { mode: 'autonomous', autonomy: autonomyAt('suggest'), releaseAutonomy: releaseOn('person', null, false) })
+
+  await start($)
+
+  expect((await bash($, create)).deny).toBeUndefined()
+  expect(commands).toEqual([create])
+})
+
+test('a store with no autonomy (no mode, no policy) gates nothing', async ($, on) => {
+  const { commands } = engine(on)
+
+  await start($)
+
+  expect((await bash($, create)).deny).toBeUndefined()
+  expect((await bash($, 'gh pr merge 701')).deny).toBeUndefined()
+  expect(commands).toEqual([create, 'gh pr merge 701'])
+})
+
+test('an autonomous part at pr_and_wait does not merge until a person approves it', async ($, on) => {
+  const { commands } = engine(on, { mode: 'autonomous', autonomy: autonomyAt('pr_and_wait'), releaseAutonomy: releaseOn('agent') })
+
+  await start($)
+
+  expect((await bash($, 'gh pr merge 701 --merge')).deny).toMatch(/guard-mod is at autonomy level pr_and_wait \(set on the part\) and no person has approved its merge.*Approve merge for the part on the release page/)
+  expect(commands).toEqual([])
+})
+
+test('a proposed pr_and_wait part is matched by its recorded PR number, not by a PR on its branch', async ($, on) => {
+  const other: Pr = { ...openPr, number: 799, url: 'https://github.com/o/r/pull/799' }
+  const { commands, toasts } = engine(on, {
+    mode: 'autonomous',
+    componentState: 'proposed',
+    pullRequest: { number: 701, url: openPr.url },
+    prs: { '701': openPr, '799': other },
+    autonomy: autonomyAt('pr_and_wait'),
+    releaseAutonomy: releaseOn('agent'),
+  })
+
+  await start($)
+
+  expect((await bash($, 'gh pr merge 701')).deny).toMatch(/pr_and_wait/)
+  expect(toasts.at(-1)).toBe("Marshall held a merge: guard-mod waits for a person's approval")
+  expect((await bash($, 'gh pr merge 799')).deny).toBeUndefined()
+  expect(commands).toEqual(['gh pr merge 799'])
+})
+
+test('an approved pr_and_wait part merges', async ($, on) => {
+  const { commands } = engine(on, {
+    mode: 'autonomous',
+    autonomy: autonomyAt('pr_and_wait', { id: 'a1', approved_by: { display_name: 'Pat' }, approved_at: '2026-11-09T10:00:00Z', head_sha: null }),
+    releaseAutonomy: releaseOn('agent'),
+  })
+
+  await start($)
+
+  expect((await bash($, 'gh pr merge 701 --merge')).deny).toBeUndefined()
+  expect(commands).toEqual(['gh pr merge 701 --merge'])
+})
+
+test('an autonomous part at suggest does not merge', async ($, on) => {
+  engine(on, { mode: 'autonomous', autonomy: autonomyAt('suggest'), releaseAutonomy: releaseOn('agent') })
+
+  await start($)
+
+  expect((await bash($, 'gh pr merge 701')).deny).toMatch(/level suggest .*does not land/)
+})
+
+test('a supervised claim at pr_and_wait merges on the person\'s word, with no approval', async ($, on) => {
+  const { commands } = engine(on, { mode: 'supervised', autonomy: autonomyAt('pr_and_wait'), releaseAutonomy: releaseOn('person') })
+
+  await start($)
+
+  expect((await bash($, 'gh pr merge 701')).deny).toBeUndefined()
+  expect(commands).toEqual(['gh pr merge 701'])
+})
+
+test('the release PR waits for a person while an autonomous run is open and its merge to main is person', async ($, on) => {
+  const { commands } = engine(on, {
+    branch: 'release/claude-mod',
+    localWorktree: '/elsewhere',
+    prs: { '702': releasePr },
+    releaseAutonomy: releaseOn('person'),
+    dispatchRuns: [{ closed_at: null }],
+  })
+
+  await start($)
+
+  expect((await bash($, 'gh pr merge 702 --merge')).deny).toMatch(/claude-mod's merge to main needs a person \(set on the release\).*Approve merge on the release page/)
+  expect(commands).toEqual([])
+})
+
+const approvedRelease = { id: 'a2', approved_by: { display_name: 'Pat' }, approved_at: '2026-11-09T10:00:00Z', head_sha: 'abc1234' }
+
+const releaseMergeRuns = (name: string, fixture: Fixture) =>
+  test(name, async ($, on) => {
+    const { commands } = engine(on, { branch: 'release/claude-mod', localWorktree: '/elsewhere', prs: { '702': releasePr }, ...fixture })
+
+    await start($)
+
+    expect((await bash($, 'gh pr merge 702')).deny).toBeUndefined()
+    expect(commands).toEqual(['gh pr merge 702'])
+  })
+
+releaseMergeRuns('the release PR merges once a person approved it', { releaseAutonomy: releaseOn('person', approvedRelease), dispatchRuns: [{ closed_at: null }] })
+releaseMergeRuns('the release PR merges when its merge to main is agent', { releaseAutonomy: releaseOn('agent'), dispatchRuns: [{ closed_at: null }] })
+releaseMergeRuns('the release PR merges when no autonomous run is open on it', { releaseAutonomy: releaseOn('person'), dispatchRuns: [{ closed_at: '2026-11-09T09:00:00Z' }] })
+releaseMergeRuns('the release PR merges when autonomy is off for the workspace', { releaseAutonomy: releaseOn('person', null, false), dispatchRuns: [{ closed_at: null }] })
+
+test('an autonomy check that cannot read the release lets the command run and says so', async ($, on) => {
+  const { commands, toasts } = engine(on, { mode: 'autonomous', failing: { release_get: 'store unreachable' } })
+
+  await start($)
+  const created = await bash($, create)
+  const merged = await bash($, 'gh pr merge 701')
+
+  expect(created.deny).toBeUndefined()
+  expect(merged.deny).toBeUndefined()
+  expect(commands).toEqual([create, 'gh pr merge 701'])
+  expect((created.context ?? []).join('\n')).toMatch(/did not check this pull request \(the guard failed: store unreachable\); it ran unchecked/)
+  expect((merged.context ?? []).join('\n')).toMatch(/did not check this merge \(the guard failed: store unreachable\); it ran unchecked/)
+  expect(toasts.join('\n')).toMatch(/ran unchecked/)
+})
+
+// ── The kill switch: a paused claim stops its worker ───────────────────────
+
+const pausedBody = JSON.stringify({
+  error: 'worker_paused',
+  message:
+    'This worker is paused: its claim is held with the lease frozen, and its writes on the part are refused until a person resumes it; nothing was written. Stop and wait — do not retry in a loop.',
+  pause_scope: 'claim',
+  claim: 'mine-here',
+  component: { id: 'c-guard', slug: 'guard-mod' },
+  paused_by: { id: 'u1', display_name: 'Pat Lee' },
+  paused_at: '2026-11-09T12:00:00Z',
+})
+
+test('a claim my_claims shows paused stops every tool call here but the reads, the heartbeat and a resume', async ($, on) => {
+  const { commands, statuses, toasts } = engine(on, {
+    live: { paused_at: '2026-11-09T12:00:00Z', paused_by: { display_name: 'Pat Lee' } },
+    failing: { heartbeat_claim: pausedBody },
+    // The model's own heartbeat is refused too: a beat that ran would mean it resumed.
+    toolAnswers: { mcp__plugin_marshall_marshall__heartbeat_claim: { text: pausedBody, isError: true } },
+  })
+
+  await start($)
+
+  expect((await bash($, 'ls')).deny).toMatch(/your claim on guard-mod is paused by Pat Lee at 2026-11-09T12:00:00Z\. Stop work now: do not retry/)
+  expect((await edit($, `${ROOT}/app/x.php`)).deny).toMatch(/is paused by Pat Lee/)
+  expect((await $.tool.call({ tool: 'Read', file_path: `${ROOT}/a.php` } as never)).deny).toMatch(/is paused/)
+
+  for (const tool of ['release_get', 'heartbeat_claim', 'worker_resume', 'release_claim', 'worker_list', 'autonomy_get']) {
+    expect((await $.tool.call({ tool: `mcp__plugin_marshall_marshall__${tool}`, component: 'c-guard' } as never)).deny).toBeUndefined()
+  }
+
+  expect((await $.tool.call({ tool: 'ToolSearch', query: 'select:x', max_results: 1 } as never)).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'mcp__plugin_marshall_marshall__set_component_state', component: 'c-guard', state: 'proposed' } as never)).deny).toMatch(/paused/)
+  expect(commands.filter(command => !command.startsWith('mcp__') && command !== 'ToolSearch')).toEqual([])
+  expect(statuses.at(-1)).toMatch(/paused by Pat Lee/)
+  expect(toasts.filter(toast => /this worker is paused by Pat Lee/.test(toast))).toHaveLength(1)
+})
+
+test('a heartbeat refused worker_paused pauses the worker; a beat that succeeds resumes it', async ($, on) => {
+  const { failing, commands } = engine(on, { failing: { heartbeat_claim: pausedBody } })
+
+  await start($)
+
+  expect((await bash($, 'ls')).deny).toMatch(/your claim on guard-mod is paused by Pat Lee at 2026-11-09T12:00:00Z/)
+
+  delete failing.heartbeat_claim
+  await start($)
+
+  expect((await bash($, 'ls')).deny).toBeUndefined()
+  expect(commands).toEqual(['ls'])
+})
+
+test('a stopped claim, gone from my_claims, no longer holds the session paused', async ($, on) => {
+  const state: { paused_at?: string | null; paused_by?: { display_name: string } | null; gone?: boolean } = {
+    paused_at: '2026-11-09T12:00:00Z',
+    paused_by: { display_name: 'Pat Lee' },
+  }
+  const { failing, commands } = engine(on, { live: state, failing: { heartbeat_claim: pausedBody } })
+
+  await start($)
+
+  expect((await bash($, 'ls')).deny).toMatch(/paused/)
+
+  state.gone = true
+  delete failing.heartbeat_claim
+  await start($)
+
+  expect((await bash($, 'ls')).deny).toBeUndefined()
+  expect(commands).toEqual(['ls'])
+})
+
+test('a supervised claim is paused like any other', async ($, on) => {
+  engine(on, { mode: 'supervised', live: { paused_at: '2026-11-09T12:00:00Z', paused_by: { display_name: 'Pat Lee' } }, failing: { heartbeat_claim: pausedBody } })
+
+  await start($)
+
+  expect((await bash($, 'gh pr merge 701')).deny).toMatch(/paused by Pat Lee/)
+})
+
+test('a subagent whose own heartbeat is refused worker_paused stops; the main loop keeps working', async ($, on) => {
+  const { commands } = engine(on, {
+    toolAnswers: { mcp__plugin_marshall_marshall__heartbeat_claim: { text: pausedBody.replace('"mine-here"', '"mine-elsewhere"').replace('guard-mod', 'live-touches'), isError: true } },
+  })
+
+  await start($)
+  await $.tool.call({ tool: 'mcp__plugin_marshall_marshall__heartbeat_claim', claim: 'mine-elsewhere', agentId: 'a1' } as never)
+
+  expect((await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'a1' } as never)).deny).toMatch(/your claim on live-touches is paused by Pat Lee/)
+  expect((await edit($, '/work/swarm-release-manager-touches/app/y.php')).deny).toMatch(/live-touches is paused/)
+  expect((await bash($, 'ls')).deny).toBeUndefined()
+  expect(commands.filter(command => command === 'ls')).toHaveLength(1)
+})
+
+test('a subagent\'s paused claim that ends (stopped, revoked, released) stops holding that subagent', async ($, on) => {
+  const state: { elsewhereGone?: boolean } = {}
+  const { commands } = engine(on, {
+    live: state,
+    toolAnswers: { mcp__plugin_marshall_marshall__heartbeat_claim: { text: pausedBody.replace('"mine-here"', '"mine-elsewhere"'), isError: true } },
+  })
+
+  await start($)
+  await $.tool.call({ tool: 'mcp__plugin_marshall_marshall__heartbeat_claim', claim: 'mine-elsewhere', agentId: 'a1' } as never)
+
+  expect((await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'a1' } as never)).deny).toMatch(/paused/)
+
+  state.elsewhereGone = true
+  await start($)
+
+  expect((await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'a1' } as never)).deny).toBeUndefined()
+  expect(commands.filter(command => command === 'ls')).toHaveLength(1)
+})
+
+test('a store that cannot be read pauses nothing: the work runs, and the status line says so', async ($, on) => {
+  const { commands, statuses } = engine(on, { failing: { my_claims: 'store unreachable' } })
+
+  await start($)
+
+  expect((await bash($, 'ls')).deny).toBeUndefined()
+  expect(commands).toEqual(['ls'])
+  expect(statuses.at(-1)).toMatch(/Marshall unreachable: store unreachable/)
+})
+
+test('a pause already learned is lifted, and said to be unchecked, once the store cannot be read', async ($, on) => {
+  const { failing, commands, statuses } = engine(on, {
+    live: { paused_at: '2026-11-09T12:00:00Z', paused_by: { display_name: 'Pat Lee' } },
+    failing: { heartbeat_claim: pausedBody },
+  })
+
+  await start($)
+
+  expect((await bash($, 'ls')).deny).toMatch(/paused by Pat Lee/)
+
+  failing.my_claims = 'store unreachable'
+  await start($)
+
+  expect((await bash($, 'ls')).deny).toBeUndefined()
+  expect(commands).toEqual(['ls'])
+  expect(statuses.at(-1)).toMatch(/Marshall unreachable: store unreachable · pause unchecked/)
+})
+
+test('a subagent that took its claim is stopped once my_claims shows it paused, before its first beat', async ($, on) => {
+  const state: { paused_at?: string | null; paused_by?: { display_name: string } | null } = {}
+  const { commands } = engine(on, {
+    localWorktree: '/elsewhere',
+    live: state,
+    toolAnswers: { mcp__plugin_marshall_marshall__claim_component: { text: JSON.stringify({ id: 'mine-here', fence: 1, mode: 'autonomous' }) } },
+  })
+
+  await start($)
+  await $.tool.call({ tool: 'mcp__plugin_marshall_marshall__claim_component', component: 'c-guard', agentId: 'a1' } as never)
+
+  state.paused_at = '2026-11-09T12:00:00Z'
+  state.paused_by = { display_name: 'Pat Lee' }
+  await start($)
+
+  expect((await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'a1' } as never)).deny).toMatch(/paused by Pat Lee/)
+  expect((await bash($, 'ls')).deny).toBeUndefined()
+  expect(commands.filter(command => command === 'ls')).toHaveLength(1)
 })
 
 // ── Auto mode: the mod's own calls ──────────────────────────────────────────
