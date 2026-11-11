@@ -41,7 +41,7 @@ marshall/
     release-admin              archive / restore / delete a record (corrective)
 ```
 
-The skills drive fifty-two of the store's MCP tools, each prefixed with the plugin's
+The skills drive fifty-five of the store's MCP tools, each prefixed with the plugin's
 connection name — `mcp__plugin_marshall_marshall__release_next`, and so on. They
 span the read path (`release_get`, `release_next`, `release_status`,
 `project_list`, `release_changelog`), the write path (`project_create`,
@@ -53,7 +53,8 @@ lifecycle (`claim_component`, `heartbeat_claim`, `release_claim`, `revoke_claim`
 `set_release_lenses`), dispatch (`dispatch_open`, `dispatch_report`/
 `dispatch_reports`, `dispatch_get`, `dispatch_close`), deploy and ship
 (`set_deploy_step`, `set_ship_step`), autonomy and the kill switch
-(`autonomy_get`, `worker_list`, `worker_pause`/`worker_stop`/`worker_resume`), and
+(`autonomy_get`, `worker_list`, `worker_pause`/`worker_stop`/`worker_resume`), stops
+and the inbox (`stop_raise`, `stop_clear`, `needs_you_list`), and
 the corrective lifecycle (`archive_*` / `unarchive_*` / `hard_delete_*`).
 
 Every other registered tool is either referenced by a skill or named, with its
