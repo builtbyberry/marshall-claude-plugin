@@ -783,6 +783,53 @@ const fromLayer = (setting: Setting | undefined): string => (setting?.source ? `
  */
 const onMachine = (seen: Seen): Claim[] => seen.claims.filter(onThisMachine)
 
+/** Every worktree of this checkout's repository on this Mac, this one included. */
+const repoWorktrees = async ($: EngineInterface, root: string): Promise<Set<string> | undefined> => {
+  const listed = await run($, ['git', 'worktree', 'list', '--porcelain'])
+
+  if (listed === undefined) {
+    return undefined
+  }
+
+  return new Set([
+    root,
+    ...listed
+      .split('\n')
+      .filter(line => line.startsWith('worktree '))
+      .map(line => line.slice('worktree '.length)),
+  ])
+}
+
+/**
+ * The claims on this Mac that could gate a pull request here, narrowed before
+ * any release is read: only autonomous claims (a supervised one never gates),
+ * and only those taken from a worktree of this repository or held in the
+ * project of a release this checkout or the PR's branches name. A claim from
+ * another repository is never read: its release document can be larger than
+ * the MCP client will return, and it cannot own this PR.
+ */
+const gatingClaims = async ($: EngineInterface, seen: Seen, branches: (string | undefined)[]): Promise<Claim[] | { unchecked: string }> => {
+  const candidates = onMachine(seen).filter(claim => claim.mode === 'autonomous')
+
+  if (candidates.length === 0) {
+    return []
+  }
+
+  const worktrees = await repoWorktrees($, seen.place.root)
+  const releaseOf = (claim: Claim): ReleaseSummary | undefined => seen.releases.find(release => release.claims.some(owned => owned.id === claim.id))
+  const fromHere = (claim: Claim): boolean => claim.worktree !== null && worktrees?.has(claim.worktree) === true
+  const named = [seen.release, ...branches.map(branch => releaseByBranch(seen.releases, branch, seen.place.root))]
+  const projects = new Set(
+    [...named, ...candidates.filter(fromHere).map(releaseOf)].flatMap(release => (release === undefined ? [] : [release.project])),
+  )
+
+  if (worktrees === undefined && projects.size === 0) {
+    return { unchecked: "could not list this repository's worktrees to tell which claims could own this pull request" }
+  }
+
+  return candidates.filter(claim => fromHere(claim) || projects.has(releaseOf(claim)?.project ?? ''))
+}
+
 /**
  * Before `gh pr create`: an autonomous claim at level suggest reports back
  * instead of opening a pull request.
@@ -795,7 +842,13 @@ const guardCreate = async ($: EngineInterface, gh: GhCall): Promise<Denial | { u
   }
 
   const branch = (gh.head ?? seen.place.branch).split(':').pop()
-  const work = (await held($, seen, onMachine(seen))).find(({ component }) => component.topic_branch === branch)
+  const claims = await gatingClaims($, seen, [branch])
+
+  if (!Array.isArray(claims)) {
+    return claims
+  }
+
+  const work = (await held($, seen, claims)).find(({ component }) => component.topic_branch === branch)
 
   if (work === undefined || !isGated(work) || levelOf(work)?.value !== 'suggest') {
     return undefined
@@ -838,7 +891,9 @@ const guardMerge = async ($: EngineInterface, before: PullRequest | undefined): 
     return undefined
   }
 
-  const work = (await held($, seen, onMachine(seen))).find(({ component }) =>
+  const claims = await gatingClaims($, seen, [before.baseRefName, before.headRefName])
+  const partUnchecked = Array.isArray(claims) ? undefined : claims
+  const work = (await held($, seen, Array.isArray(claims) ? claims : [])).find(({ component }) =>
     component.pull_request?.number != null ? component.pull_request.number === before.number : component.topic_branch === before.headRefName,
   )
 
@@ -863,7 +918,7 @@ const guardMerge = async ($: EngineInterface, before: PullRequest | undefined): 
   const releasePr = releaseByBranch(seen.releases, before.headRefName, seen.place.root)
 
   if (releasePr === undefined) {
-    return undefined
+    return partUnchecked
   }
 
   const document = await call<ReleaseDocument>($, 'release_get', { project: releasePr.project, release: releasePr.slug, view: 'full' })
@@ -877,7 +932,7 @@ const guardMerge = async ($: EngineInterface, before: PullRequest | undefined): 
     }
   }
 
-  return undefined
+  return partUnchecked
 }
 
 const heldWorkText = async ($: EngineInterface): Promise<string | undefined> => {

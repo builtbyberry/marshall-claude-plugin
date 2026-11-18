@@ -40,7 +40,12 @@ type Fixture = {
   releaseAutonomy?: Record<string, unknown> | null
   dispatchRuns?: { closed_at: string | null }[]
   toolAnswers?: Record<string, { text: string; isError?: boolean }>
+  worktrees?: string[] | null
+  foreignClaim?: boolean
 }
+
+/** Where a claim from another repository on this Mac was taken. */
+const FOREIGN_WORKTREE = '/work/laravel-swarm-worktrees/realtime-dispatch-fanout'
 
 const openPr: Pr = {
   number: 701,
@@ -88,6 +93,8 @@ const engine = (on: On, fixture: Fixture = {}) => {
     releaseAutonomy,
     dispatchRuns,
     toolAnswers = {},
+    worktrees = [ROOT, '/work/swarm-release-manager-touches'],
+    foreignClaim = false,
   } = fixture
   const calls: { tool: string; args: Record<string, unknown> }[] = []
   const statuses: (string | undefined)[] = []
@@ -116,6 +123,10 @@ const engine = (on: On, fixture: Fixture = {}) => {
 
     if (argv.includes('--abbrev-ref')) {
       return ran(`${branch}\n`)
+    }
+
+    if (argv === 'git worktree list --porcelain') {
+      return worktrees === null ? ran('', 128) : ran(worktrees.map(path => `worktree ${path}\nHEAD 0000\nbranch refs/heads/x\n`).join('\n'))
     }
 
     if (argv.startsWith('git diff --name-only origin/release/claude-mod...HEAD')) {
@@ -198,6 +209,18 @@ const engine = (on: On, fixture: Fixture = {}) => {
             findings: { open: 26, high_open: 1 },
             claims: [],
           },
+          ...(foreignClaim
+            ? [
+                {
+                  id: 'r3',
+                  project: 'laravel-swarm',
+                  slug: 'realtime-dispatch',
+                  components: { total: 32, merged: 20 },
+                  findings: { open: 371, high_open: 0 },
+                  claims: [{ id: 'foreign', component_id: 'c-foreign' }],
+                },
+              ]
+            : []),
         ],
       })
     }
@@ -229,8 +252,14 @@ const engine = (on: On, fixture: Fixture = {}) => {
                 },
               ]),
           ...extraClaims,
+          ...(foreignClaim ? [{ id: 'foreign', component_id: 'c-foreign', worktree: FOREIGN_WORKTREE, machine: HOST, mode: 'autonomous' }] : []),
         ],
       })
+    }
+
+    // The real answer for a release document past the MCP client's output limit.
+    if (e.tool === 'release_get' && e.args.project === 'laravel-swarm') {
+      return { value: { content: [{ type: 'text' as const, text: 'Error: result (1,012,345 characters) exceeds maximum allowed tokens' }], isError: false } }
     }
 
     if (e.tool === 'release_get') {
@@ -1478,6 +1507,66 @@ test('an autonomy check that cannot read the release lets the command run and sa
   expect((created.context ?? []).join('\n')).toMatch(/did not check this pull request \(the guard failed: store unreachable\); it ran unchecked/)
   expect((merged.context ?? []).join('\n')).toMatch(/did not check this merge \(the guard failed: store unreachable\); it ran unchecked/)
   expect(toasts.join('\n')).toMatch(/ran unchecked/)
+})
+
+// ── Which claims the guard reads ───────────────────────────────────────────
+
+const releaseReads = (calls: { tool: string; args: Record<string, unknown> }[]) =>
+  calls.filter(({ tool }) => tool === 'release_get').map(({ args }) => `${String(args.project)}/${String(args.release)}`)
+
+test('a claim from another repository on this Mac is never read, so a pull request here is still checked', async ($, on) => {
+  const { calls, commands } = engine(on, { foreignClaim: true, mode: 'autonomous', autonomy: autonomyAt('suggest'), releaseAutonomy: releaseOn('agent') })
+
+  await start($)
+
+  expect((await bash($, create)).deny).toMatch(/guard-mod is at autonomy level suggest/)
+  expect((await bash($, 'gh pr merge 701')).deny).toMatch(/level suggest .*does not land/)
+  expect(commands).toEqual([])
+  expect(releaseReads(calls).filter(read => read.startsWith('laravel-swarm/'))).toEqual([])
+})
+
+test('a claim in a sibling worktree of this repository is held to its level when no release names the checkout', async ($, on) => {
+  const { commands } = engine(on, {
+    branch: 'main',
+    localWorktree: '/work/swarm-release-manager-sibling',
+    worktrees: [ROOT, '/work/swarm-release-manager-sibling'],
+    mode: 'autonomous',
+    autonomy: autonomyAt('suggest'),
+    releaseAutonomy: releaseOn('agent'),
+  })
+
+  await start($)
+
+  expect((await bash($, 'gh pr create --head feat/claude-mod-guard-mod --title x')).deny).toMatch(/guard-mod is at autonomy level suggest/)
+  expect(commands).toEqual([])
+})
+
+test('only supervised claims here: the part check reads no release', async ($, on) => {
+  // A failed create, so the observer that records a new PR reads nothing either.
+  const { calls, commands } = engine(on, { foreignClaim: true, mode: 'supervised', autonomy: autonomyAt('suggest'), bashIsError: true })
+
+  await start($)
+
+  expect((await bash($, create)).deny).toBeUndefined()
+  expect(commands).toEqual([create])
+  expect(releaseReads(calls)).toEqual([])
+})
+
+test("with no worktree list and no release to tie a claim to this checkout, the pull request runs unchecked and says so", async ($, on) => {
+  const { commands } = engine(on, {
+    branch: 'main',
+    localWorktree: '/work/swarm-release-manager-sibling',
+    worktrees: null,
+    mode: 'autonomous',
+    autonomy: autonomyAt('suggest'),
+  })
+
+  await start($)
+  const ran = await bash($, 'gh pr create --head feat/claude-mod-guard-mod --title x')
+
+  expect(ran.deny).toBeUndefined()
+  expect(commands).toEqual(['gh pr create --head feat/claude-mod-guard-mod --title x'])
+  expect((ran.context ?? []).join('\n')).toMatch(/could not list this repository's worktrees.*it ran unchecked/)
 })
 
 // ── The kill switch: a paused claim stops its worker ───────────────────────
